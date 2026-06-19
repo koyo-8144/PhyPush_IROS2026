@@ -18,9 +18,13 @@ from configs import M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN, M_UNSEEN_M
 # ==========================================
 PLOT_SHOW = False
 SMOOTHING_WINDOW_SIZE = 3
-TOP_NUM = 5
+TOP_NUM = 10
 
-CHECKPOINT_DIR = "./results/checkpoints/from_20260618/20260618_191529/pinn_pcri-L1_p5c10.0" 
+# time = "20260618_191529"
+time = "20260619_153723"
+model = "pinn_pcri-L1_p5c10.0"
+
+CHECKPOINT_DIR = f"./results/checkpoints/from_20260618/{time}/{model}" 
 
 WEIGHTS_PATH = os.path.join(CHECKPOINT_DIR, "transformer_epoch1000.pth")
 CONFIG_PATH = os.path.join(CHECKPOINT_DIR, "config.json")

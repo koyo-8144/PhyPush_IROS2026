@@ -19,12 +19,17 @@ MODELS_TO_COMPARE = {
         "path": f"/home/psxkf4/phypush_training/results/checkpoints/baseline_random_forest/{csv_file}",
         "force_input": "Yes"
     },
-    r"PhyPush ($\mathcal{L}_{\text{data}}$)": {
-        "path": os.path.join(BASE_RUN_DIR, "20260619_002255", f"data_tcri-log1p_mse_task10.0/{csv_file}"),
+    # r"PhyPush ($\mathcal{L}_{\text{data}}$)": {
+    #     "path": os.path.join(BASE_RUN_DIR, "20260619_002255", f"data_tcri-log1p_mse_task10.0/{csv_file}"),
+    #     "force_input": "No"
+    # },
+    r"PhyPush ($\mathcal{L}_{\text{force}}$) world frame": {
+        "path": os.path.join(BASE_RUN_DIR, "20260618_191529", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
         "force_input": "No"
     },
-    r"PhyPush ($\mathcal{L}_{\text{force}}$)": {
-        "path": os.path.join(BASE_RUN_DIR, "20260618_191529", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
+
+    r"PhyPush ($\mathcal{L}_{\text{force}}$) local frame": {
+        "path": os.path.join(BASE_RUN_DIR, "20260619_153723", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
         "force_input": "No"
     },
 }

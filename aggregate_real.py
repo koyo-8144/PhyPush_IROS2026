@@ -12,7 +12,8 @@ OUTPUT_DIR = "results/paper/real"
 G = 9.81  # Gravity constant for friction force calculation
 
 # --- UPDATE THIS PATH TO MATCH YOUR TIMESTAMP RUN ---
-BASE_RUN_DIR = "/home/psxkf4/phypush_training/results/checkpoints/from_20260316"
+# BASE_RUN_DIR = "/home/psxkf4/phypush_training/results/checkpoints/from_20260316"
+BASE_RUN_DIR = "/home/psxkf4/PhyPush/results/checkpoints/from_20260618"
 
 
 # --- REAL-WORLD FRICTION MAP ---
@@ -37,10 +38,9 @@ MU_MAP = {
 csv_file = "real_evaluation_summary.csv"
 # --- MANUAL MODEL SELECTION ---
 MODELS_TO_COMPARE = {
-    r"PhyPush ($\mathcal{L}_{\text{data}}$)": os.path.join(BASE_RUN_DIR, "20260619_002255", "data_tcri-log1p_mse_task10.0", csv_file),
-    r"PhyPush ($\mathcal{L}_{\text{force}}$)": os.path.join(BASE_RUN_DIR, "20260618_191529", "pinn_pcri-L1_p5c10.0", csv_file),
-    r"PhyPush ($\mathcal{L}_{\text{force,un}}$)": os.path.join(BASE_RUN_DIR, "", "pinn_annstartepo300_rampd600_pcri-L1_p5c10.0_p2-2c5.0", csv_file),
-    r"PhyPush ($\mathcal{L}_{\text{force,acc un}}$)": os.path.join(BASE_RUN_DIR, "", "pinn_annstartepo300_rampd600_pcri-L1_p5c10.0_p9-2c5.0", csv_file),
+    # r"PhyPush ($\mathcal{L}_{\text{data}}$)": os.path.join(BASE_RUN_DIR, "20260619_002255", "data_tcri-log1p_mse_task10.0", csv_file),
+    r"PhyPush ($\mathcal{L}_{\text{force}}$) world frame": os.path.join(BASE_RUN_DIR, "20260618_191529", "pinn_pcri-L1_p5c10.0", csv_file),
+    r"PhyPush ($\mathcal{L}_{\text{force}}$) local frame": os.path.join(BASE_RUN_DIR, "20260619_153723", "pinn_pcri-L1_p5c10.0", csv_file),
 }
 
 # --- METRICS ---
