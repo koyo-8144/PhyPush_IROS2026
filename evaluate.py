@@ -11,7 +11,7 @@ from sklearn.metrics import r2_score
 from models import PhysicsTransformerEstimator
 from dataset import create_dataloaders
 from utils import set_seed, clean_force_col
-from configs import M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN, M_UNSEEN_MAX, MU_UNSEEN_MAX, GLOBAL_M_RANGE, GLOBAL_MU_RANGE, GLOBAL_FRIC_RANGE, REAL_M_RANGE, REAL_MU_RANGE, REAL_FRIC_RANGE, INCLUDE_UNSEEN
+from configs import M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN, M_UNSEEN_MAX, MU_UNSEEN_MAX, GLOBAL_M_RANGE, GLOBAL_MU_RANGE, GLOBAL_FRIC_RANGE, REAL_M_RANGE, REAL_MU_RANGE, REAL_FRIC_RANGE, INCLUDE_UNSEEN, CSV_PATH
 
 # ==========================================
 # 1. CONFIGURATION & PATHS
@@ -20,7 +20,6 @@ PLOT_SHOW = False
 SMOOTHING_WINDOW_SIZE = 3
 TOP_NUM = 5
 
-CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_tb-3_ta57_emavel1.0_velstd0.0_broad.csv"
 CHECKPOINT_DIR = "./results/checkpoints/from_20260618/20260618_191529/pinn_pcri-L1_p5c10.0" 
 
 WEIGHTS_PATH = os.path.join(CHECKPOINT_DIR, "transformer_epoch1000.pth")

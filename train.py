@@ -14,11 +14,10 @@ from utils import set_seed, build_model_string, clean_force_col
 from models import PhysicsTransformerEstimator
 from losses import log_mse_loss, PinnLossCalculator
 from dataset import create_dataloaders
-from configs import used_config
+from configs import used_config, CSV_PATH
 
 def main():
     set_seed(42)
-    CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_tb-3_ta57_emavel1.0_velstd0.0_broad.csv"
     
     if not os.path.exists(CSV_PATH):
         print(f"Error: File not found at {CSV_PATH}")

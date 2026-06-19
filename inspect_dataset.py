@@ -3,26 +3,39 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from configs import G, M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN
+from configs import G, M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN, CSV_PATH, FRAME_MODE
 
 from dataset import create_dataloaders
 from utils import clean_force_col, add_min_max_text
 
 def inspect_dataloader(loader, num_samples=3):
     batch = next(iter(loader))
-    X_acc, X_vel, y, fz_robot, rhs_acc, lhs_net_f, fz_normal, start_t, fx_robot = batch
+    
+    # Explicitly named variables indicating axis and source
+    X_acc, X_vel, y, fz_robot_sim, acc_x_sim, net_fx_sim, fz_normal_sim, start_t, fx_robot_sim = batch
     
     X_acc = X_acc.numpy()
     X_vel = X_vel.numpy()
     y = y.numpy()
-    fz_robot = fz_robot.numpy()
-    rhs_acc = rhs_acc.numpy()
-    lhs_net_f = lhs_net_f.numpy()
-    fz_normal = fz_normal.numpy()
-    fx_robot = fx_robot.numpy()
+    fz_robot_sim = fz_robot_sim.numpy()
+    acc_x_sim = acc_x_sim.numpy()
+    net_fx_sim = net_fx_sim.numpy()
+    fz_normal_sim = fz_normal_sim.numpy()
+    fx_robot_sim = fx_robot_sim.numpy()
     
     seq_len = X_vel.shape[1]
     time_steps = np.arange(seq_len)
+    
+    # Tableau 10 color palette for high contrast and academic readability
+    colors = {
+        'vel': '#1f77b4',       # Muted Blue
+        'acc': '#d62728',       # Brick Red
+        'robot': '#2ca02c',     # Forest Green
+        'friction': '#ff7f0e',  # Safety Orange
+        'net_sim': '#7f7f7f',   # Neutral Grey
+        'net_calc': '#9467bd',  # Muted Purple
+        'theory': '#17becf'     # Cyan
+    }
     
     sns.set_theme(style="whitegrid")
     
@@ -32,62 +45,89 @@ def inspect_dataloader(loader, num_samples=3):
         gt_mass = y[i, 0]
         gt_mu = y[i, 1]
         
-        vel_win = X_vel[i, :, 0]
-        axes[0].plot(time_steps, vel_win, 'b-o', linewidth=2, label='Extracted Velocity')
-        axes[0].set_title("1. Model Input: Velocity")
+        # -----------------------------------------------------------
+        # PLOT 1: Velocity
+        # -----------------------------------------------------------
+        vel_x = X_vel[i, :, 0]
+        axes[0].plot(time_steps, vel_x, color=colors['vel'], marker='o', markersize=4, linewidth=2, label='Extracted EE Velocity')
+        axes[0].set_title("1. Model Input: Kinematics (Velocity)")
         axes[0].set_ylabel("Velocity [m/s]")
-        add_min_max_text(axes[0], vel_win, "m/s")
+        # add_min_max_text(axes[0], vel_x, "m/s")
         axes[0].legend(loc='upper left')
         
-        info_text = f"M: {gt_mass:.3f}\nMu: {gt_mu:.3f}"
-        axes[0].text(0.05, 0.95, info_text, transform=axes[0].transAxes, 
-                     verticalalignment='top', fontsize=14,
-                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        # info_text = f"Ground Truth | Mass: {gt_mass:.3f} kg | Friction (\u03bc): {gt_mu:.3f}"
+        # axes[0].text(0.02, 0.95, info_text, transform=axes[0].transAxes, 
+        #              verticalalignment='top', fontsize=12, fontweight='bold',
+        #              bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor=colors['net_sim'], alpha=0.9))
         
-        acc_win = X_acc[i, :, 0]
-        axes[1].plot(time_steps, acc_win, 'r-o', linewidth=2, label='Extracted Acceleration')
-        axes[1].set_title("2. Model Input: Acceleration")
-        axes[1].set_ylabel("Acceleration [m/s^2]")
-        add_min_max_text(axes[1], acc_win, "m/s^2")
+        # -----------------------------------------------------------
+        # PLOT 2: Acceleration
+        # -----------------------------------------------------------
+        acc_x = X_acc[i, :, 0]
+        axes[1].plot(time_steps, acc_x, color=colors['acc'], marker='o', markersize=4, linewidth=2, label='Extracted EE Acceleration')
+        axes[1].set_title("2. Model Input: Kinematics (Acceleration)")
+        axes[1].set_ylabel("Acceleration [m/s\u00b2]")
+        # add_min_max_text(axes[1], acc_x, "m/s\u00b2")
         axes[1].legend(loc='upper left')
+
+        # -----------------------------------------------------------
+        # PHYSICS CALCULATIONS
+        # -----------------------------------------------------------
+        if FRAME_MODE == "world":
+            normal_force_calc = np.clip((gt_mass * G) - fz_robot_sim[i], 0.0, None)
+        elif FRAME_MODE == "local":
+            normal_force_calc = np.clip((gt_mass * G) + fz_robot_sim[i], 0.0, None)
+        fric_magnitude_calc = gt_mu * normal_force_calc 
+        fric_magnitude_sim = gt_mu * np.abs(fz_normal_sim[i])
         
-        axes[2].plot(time_steps, lhs_net_f[i], label='LHS (Net Force)', color='purple', linestyle='--', linewidth=2)
-        axes[2].plot(time_steps, fx_robot[i], label='Robot Force', color='green', alpha=0.8, linewidth=2)
-        axes[2].plot(time_steps, fz_normal[i], label='Table Force (Normal)', color='orange', alpha=0.8, linewidth=2)
-        axes[2].set_title("3. Force Components Decomposition")
+        # Friction vector opposes the direction of motion (push is +X, friction is -X)
+        fx_friction_vector = -fric_magnitude_sim
+        calc_net_force_x = fx_robot_sim[i] + fx_friction_vector
+        mass_x_accel = gt_mass * acc_x_sim[i]
+        
+        # -----------------------------------------------------------
+        # PLOT 3: Force Decomposition
+        # -----------------------------------------------------------
+        axes[2].plot(time_steps, net_fx_sim[i], label=r'Simulator Net Force ($F_{net}$)', color=colors['net_sim'], linewidth=4, alpha=0.4)
+        axes[2].plot(time_steps, fx_robot_sim[i], label=r'Robot Applied Force ($F_{robot}$)', color=colors['robot'], linewidth=2)
+        axes[2].plot(time_steps, fx_friction_vector, label=r'Table Friction ($-F_{fric}$)', color=colors['friction'], linewidth=2)
+        axes[2].plot(time_steps, calc_net_force_x, label=r'Calculated Net Force ($F_{robot} - F_{fric}$)', color=colors['net_calc'], linestyle='--', linewidth=2)
+        
+        axes[2].set_title("3. Force Components Decomposition (X-Axis)")
         axes[2].set_ylabel("Force [N]")
         axes[2].legend(loc='upper left')
         
-        sim_win = lhs_net_f[i]
-        net_force_calc = gt_mass * rhs_acc[i]
-        axes[3].plot(time_steps, sim_win, label='Simulated Net Force', color='purple', linewidth=3, alpha=0.5)
-        axes[3].plot(time_steps, net_force_calc, 'k--', label='Calculated (GT Mass * Acc)', linewidth=1.5)
-        axes[3].set_title("4. Physics Check: Newton's 2nd Law")
+        # -----------------------------------------------------------
+        # PLOT 4: Newton's Second Law Check
+        # -----------------------------------------------------------
+        axes[3].plot(time_steps, net_fx_sim[i], label=r'Simulator Net Force ($F_{net}$)', color=colors['net_sim'], linewidth=4, alpha=0.4)
+        axes[3].plot(time_steps, calc_net_force_x, label=r'Force Sum ($F_{robot} - F_{fric}$)', color=colors['net_calc'], linewidth=2)
+        axes[3].plot(time_steps, mass_x_accel, label=r"Newton's 2nd Law ($m \cdot a_x$)", color=colors['theory'], linestyle='--', linewidth=2.5)
+        
+        axes[3].set_title("4. Physics Check: Newton's 2nd Law Alignment")
         axes[3].set_ylabel("Force [N]")
-        add_min_max_text(axes[3], sim_win, "N")
+        add_min_max_text(axes[3], net_fx_sim[i], "N")
         axes[3].legend(loc='upper left')
+    
+        # -----------------------------------------------------------
+        # PLOT 5: Friction Model Check
+        # -----------------------------------------------------------
+        axes[4].plot(time_steps, fric_magnitude_calc, label=r'Theoretical Friction ($\mu \cdot N_{calc}$)', color=colors['theory'], linewidth=2)
+        axes[4].plot(time_steps, fric_magnitude_sim, label=r'Simulator Friction ($\mu \cdot N_{sim}$)', color=colors['friction'], linestyle='--', linewidth=2.5)
         
-        normal_force_calc = np.clip((gt_mass * G) - fz_robot[i], 0.0, None)
-        fric_force_calc_profile = gt_mu * normal_force_calc
-        fric_force_direct_profile = gt_mu * np.clip(fz_normal[i], 0.0, None)
-        
-        axes[4].plot(time_steps, fric_force_calc_profile, label='Calculated Friction', color='orange', linewidth=2)
-        axes[4].plot(time_steps, fric_force_direct_profile, label='Direct Friction', color='green', linestyle=':', linewidth=2)
-        
-        axes[4].set_title("5. Physics Check: Friction Model")
-        axes[4].set_ylabel("Force [N]")
+        axes[4].set_title("5. Physics Check: Coulomb Friction Model (Magnitudes)")
+        axes[4].set_ylabel("Force Magnitude [N]")
         axes[4].set_xlabel("Time Step")
-        add_min_max_text(axes[4], fric_force_calc_profile, "N")
+        add_min_max_text(axes[4], fric_magnitude_calc, "N")
         axes[4].legend(loc='upper left')
         
         for ax in axes:
-            ax.grid(True, alpha=0.3)
+            ax.grid(True, linestyle=':', alpha=0.6)
             
         plt.tight_layout()
         plt.show()
 
 def main():
-    CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_tb-3_ta57_emavel1.0_velstd0.0_broad.csv"
     if not os.path.exists(CSV_PATH):
         print(f"Error: File not found at {CSV_PATH}")
         return

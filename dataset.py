@@ -5,7 +5,7 @@ import pandas as pd
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.model_selection import train_test_split
 from utils import clean_force_col
-from configs import M_UNSEEN_MAX, MU_UNSEEN_MAX
+from configs import M_UNSEEN_MAX, MU_UNSEEN_MAX, FRAME_MODE
 
 def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0, mu_seen_min=0.15, mu_seen_max=0.5):
     m_unseen_max, m_unseen_min = M_UNSEEN_MAX, m_seen_max
@@ -54,11 +54,18 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0, mu_see
     for idx, row in df_filtered.iterrows():
         st = int(row['start_t'])
         window_range = range(st, st + seq_len)
-        robot_fz_list.append([row[f"pinn_robot_wrench_t{t}_ax5"] for t in window_range])
-        rhs_acc_list.append([row[f"pinn_RHS_acc_t{t}_ax3"] for t in window_range])
-        lhs_net_f_list.append([row[f"pinn_LHS_wrench_t{t}_ax3"] for t in window_range])
-        table_fz_list.append([row[f"pinn_table_wrench_t{t}_ax5"] for t in window_range])
-        robot_fx_list.append([row[f"pinn_robot_wrench_t{t}_ax3"] for t in window_range])
+        if FRAME_MODE == "world":
+            robot_fz_list.append([row[f"pinn_robot_wrench_t{t}_ax5"] for t in window_range])
+            rhs_acc_list.append([row[f"pinn_RHS_acc_t{t}_ax3"] for t in window_range])
+            lhs_net_f_list.append([row[f"pinn_LHS_wrench_t{t}_ax3"] for t in window_range])
+            table_fz_list.append([row[f"pinn_table_wrench_t{t}_ax5"] for t in window_range])
+            robot_fx_list.append([row[f"pinn_robot_wrench_t{t}_ax3"] for t in window_range])
+        elif FRAME_MODE == "local":
+            robot_fz_list.append([row[f"pinn_robot_wrench_t{t}_ax3"] for t in window_range])
+            rhs_acc_list.append([row[f"pinn_RHS_acc_t{t}_ax5"] for t in window_range])
+            lhs_net_f_list.append([row[f"pinn_LHS_wrench_t{t}_ax5"] for t in window_range])
+            table_fz_list.append([row[f"pinn_table_wrench_t{t}_ax3"] for t in window_range])
+            robot_fx_list.append([row[f"pinn_robot_wrench_t{t}_ax5"] for t in window_range])
     
     fz_robot_tensor = torch.tensor(np.array(robot_fz_list), dtype=torch.float32)
     rhs_acc_tensor = torch.tensor(np.array(rhs_acc_list), dtype=torch.float32)

@@ -9,6 +9,7 @@ import seaborn as sns
 from models import PhysicsTransformerEstimator
 from dataset import create_dataloaders
 from utils import set_seed, clean_force_col
+from configs import CSV_PATH
 
 # ==========================================
 # 1. CONFIGURATION & PATHS
@@ -19,7 +20,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 PLOT_SHOW = False 
 BATCH_SIZE = 64 
 
-CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_tb-3_ta57_emavel1.0_velstd0.0_broad.csv"
 
 # --- UPDATE THIS PATH TO MATCH YOUR TIMESTAMP RUN ---
 BASE_RUN_DIR = "/home/psxkf4/phypush_training/results/checkpoints/from_20260316_YOUR_TIMESTAMP_HERE"
