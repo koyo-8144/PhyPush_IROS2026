@@ -24,7 +24,8 @@ REAL_M_RANGE = 1.856 - 0.175
 REAL_MU_RANGE = 0.4626 - 0.1580
 REAL_FRIC_RANGE = (1.856 * 0.4626 * G) - (0.175 * 0.1580 * G)
 
-FRAME_MODE = "world"
+# FRAME_MODE = "world"
+FRAME_MODE = "local"
 
 if FRAME_MODE == "world":
     CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_tb-3_ta57_emavel1.0_velstd0.0_broad.csv"

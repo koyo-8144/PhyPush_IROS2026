@@ -34,7 +34,7 @@ def main():
     # 1. HYPERPARAMETERS (Stored in a Dictionary)
     # ==========================================
     config = used_config
-    DEBUG_PHYSICS = True
+    DEBUG_PHYSICS = False
 
     # Override pinn4 coefficients if diff_coeffs_pinn4 is set to 1
     if config['diff_coeffs_pinn4']:

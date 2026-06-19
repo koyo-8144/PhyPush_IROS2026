@@ -137,6 +137,39 @@ def main():
         df['gt_fric_force'] = df['gt_fric_force'].apply(clean_force_col)
         
     print(f"Successfully loaded data! Rows: {df.shape[0]}, Columns: {df.shape[1]}")
+
+    # =======================================================
+    # DATASET MACRO SUMMARY & DISTRIBUTIONS
+    # =======================================================
+    print("\n" + "="*50)
+    print(f"DATASET MACRO SUMMARY ({FRAME_MODE.upper()} FRAME)")
+    print("="*50)
+    print(f"Total Sequences (Rows): {len(df)}")
+    
+    if 'gt_mass' in df.columns and 'gt_mu' in df.columns:
+        print("\n[Ground Truth Statistics]")
+        print(df[['gt_mass', 'gt_mu']].describe().round(4))
+        print("="*50 + "\n")
+        
+        # Plot Global Distributions
+        sns.set_theme(style="whitegrid")
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        
+        sns.histplot(data=df, x='gt_mass', kde=True, color='#9467bd', ax=axes[0])
+        axes[0].set_title(f"Ground Truth Mass Distribution (N={len(df)})")
+        axes[0].set_xlabel("Mass [kg]")
+        axes[0].set_ylabel("Count")
+        
+        sns.histplot(data=df, x='gt_mu', kde=True, color='#ff7f0e', ax=axes[1])
+        axes[1].set_title(f"Ground Truth Friction Distribution (N={len(df)})")
+        axes[1].set_xlabel("Friction Coefficient (\u03bc)")
+        axes[1].set_ylabel("Count")
+        
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("\n[Warning] 'gt_mass' or 'gt_mu' columns not found for distribution plotting.")
+    # =======================================================
     
     train_loader, val_loader, seq_len, df_filtered, choices = create_dataloaders(
         df, batch_size=64, m_seen_min=M_SEEN_MIN, m_seen_max=M_SEEN_MAX, mu_seen_min=MU_SEEN_MIN, mu_seen_max=MU_SEEN_MAX
