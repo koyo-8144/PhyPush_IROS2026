@@ -34,6 +34,7 @@ def main():
     # 1. HYPERPARAMETERS (Stored in a Dictionary)
     # ==========================================
     config = used_config
+    DEBUG_PHYSICS = True
 
     # Override pinn4 coefficients if diff_coeffs_pinn4 is set to 1
     if config['diff_coeffs_pinn4']:
@@ -76,6 +77,7 @@ def main():
     vel_filter_threshold = config['vel_filter_threshold']
     transformer_ver = config['transformer_ver']
     diff_coeffs_pinn4 = config['diff_coeffs_pinn4']
+    frame_mode = config['frame_mode']
 
     p_c = config['pinn_coeffs']
     pinn_coeff_1 = p_c['p1']
@@ -229,6 +231,14 @@ def main():
             b_robot_fz, b_rhs_acc, b_lhs_net_f, b_table_fz = b_robot_fz.to(device), b_rhs_acc.to(device), b_lhs_net_f.to(device), b_table_fz.to(device)
             b_robot_fx = b_robot_fx.to(device)
             b_start_t = b_start_t.to(device)
+
+            # =======================================================
+            # LOCAL FRAME ALIGNMENT FIX
+            # =======================================================
+            if frame_mode == "local":
+                b_robot_fz = -b_robot_fz
+            # =======================================================
+
             optimizer.zero_grad()
             
             output, (c_weights, m_weights, f_weights), (net_f_est, fric_f_est) = model(b_vel)
@@ -269,6 +279,15 @@ def main():
                 def apply_mask(loss_tensor, mask):
                     active_frames = torch.clamp(mask.sum(), min=1.0)
                     return (loss_tensor * mask).sum() / active_frames
+                
+                if DEBUG_PHYSICS:
+                    # Override network predictions with perfect Ground Truth
+                    # This forces every PINN equation to evaluate the simulator against itself
+                    m_est = m_gt.clone()
+                    mu_est = mu_gt.clone()
+                    net_f_est = b_lhs_net_f.clone()
+                    fric_f_est = fric_f_gt.clone()
+                # =======================================================
 
                 # --- PART A: NET FORCE ---
                 pinn_net_1 = apply_mask(phys.net_force_law(m_est, b_rhs_acc[:, :seq_len//2], net_f_est[:, :seq_len//2]), mask_net)
@@ -291,6 +310,39 @@ def main():
                 pinn_acc_consistency_2 = apply_mask(phys.kinematic_consistency(m_est, mu_est, b_robot_fx[:, seq_len//2:], b_robot_fz[:, seq_len//2:], b_rhs_acc[:, seq_len//2:]), mask_fric)
                 pinn_pos_kinematic = apply_mask(phys.kinematic_position_consistency(m_gt, mu_est, b_robot_fx[:, seq_len//2:], b_robot_fz[:, seq_len//2:], b_rhs_acc[:, seq_len//2:]), mask_fric)
                 pinn_pos_kinematic_2 = apply_mask(phys.kinematic_position_consistency(m_est, mu_est, b_robot_fx[:, seq_len//2:], b_robot_fz[:, seq_len//2:], b_rhs_acc[:, seq_len//2:]), mask_fric)
+
+                # =======================================================
+                # PRINT DEBUG RESULTS
+                # =======================================================
+                if DEBUG_PHYSICS:
+                    print("\n" + "="*55)
+                    print("PHYSICS EQUATION DEBUG RESULTS (GT OVERRIDE)")
+                    print("If equations are correct, values should be near 0.0")
+                    print("="*55)
+                    print("--- PART A: NET FORCE ---")
+                    print(f"Net Force 1 (m_est, acc, net_f_est):       {pinn_net_1.item():.6e}")
+                    print(f"Net Force 2 (m_est, acc, net_f_gt):        {pinn_net_2.item():.6e}")
+                    print(f"Net Force 3 (m_gt, acc, net_f_est):        {pinn_net_3.item():.6e}")
+                    print(f"Net Force 4 (smoothed, net_f_est):         {pinn_net_4.item():.6e}")
+                    print(f"Net Force 4 Ann (smoothed, net_f_gt):      {pinn_net_4_ann.item():.6e}")
+                    print(f"Acc Inertia (m_est, net_f_gt, acc):        {pinn_acc_inertia.item():.6e}")
+                    print(f"Pos Inertia (m_est, net_f_gt, acc):        {pinn_pos_inertia.item():.6e}")
+                    print("-" * 55)
+                    print("--- PART B: FRICTION ---")
+                    print(f"Friction 1 (m_est, mu_est, fric_est):      {pinn_fric_1.item():.6e}")
+                    print(f"Friction 2 (m_est, mu_est, fric_gt):       {pinn_fric_2.item():.6e}")
+                    print(f"Friction 3 (Direct: mu_gt, N_gt, fric_est):{pinn_fric_3.item():.6e}")
+                    print(f"Friction 4 (m_gt, mu_est, fric_gt):        {pinn_fric_4.item():.6e}")
+                    print(f"Friction 5 (Robust: m_est, mu_est, est):   {pinn_fric_5.item():.6e}")
+                    print(f"Friction 5 Ann (Robust: ... fric_gt):      {pinn_fric_5_ann.item():.6e}")
+                    print("-" * 55)
+                    print("--- PART C: KINEMATIC CONSISTENCY ---")
+                    print(f"Acc Consist 1 (m_gt, mu_est):              {pinn_acc_consistency.item():.6e}")
+                    print(f"Acc Consist 2 (m_est, mu_est):             {pinn_acc_consistency_2.item():.6e}")
+                    print(f"Pos Kinematic 1 (m_gt, mu_est):            {pinn_pos_kinematic.item():.6e}")
+                    print(f"Pos Kinematic 2 (m_est, mu_est):           {pinn_pos_kinematic_2.item():.6e}")
+                    print("="*55 + "\n")
+                # =======================================================
                 
                 # --- AGGREGATION ---
                 pinn_loss_1 = (mass_scale * pinn_net_1) + (fric_scale * pinn_fric_1)
@@ -418,6 +470,14 @@ def main():
                 b_acc, b_vel, b_y = b_acc.to(device), b_vel.to(device), b_y.to(device)
                 b_robot_fz, b_rhs_acc, b_lhs_net_f, b_table_fz = b_robot_fz.to(device), b_rhs_acc.to(device), b_lhs_net_f.to(device), b_table_fz.to(device)
                 b_robot_fx = b_robot_fx.to(device)
+
+                # =======================================================
+                # LOCAL FRAME ALIGNMENT FIX
+                # =======================================================
+                if frame_mode == "local":
+                    b_robot_fz = -b_robot_fz
+                # ======================================================
+
                 output, _, (net_f_est_val, fric_f_est_val) = model(b_vel) 
                 
                 m_gt_val = b_y[:, 0].unsqueeze(1)
