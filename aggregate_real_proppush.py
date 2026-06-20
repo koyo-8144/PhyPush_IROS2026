@@ -38,10 +38,8 @@ MU_MAP = {
 csv_file = "real_evaluation_summary.csv"
 # --- MANUAL MODEL SELECTION ---
 MODELS_TO_COMPARE = {
-    # r"PhyPush ($\mathcal{L}_{\text{data}}$)": os.path.join(BASE_RUN_DIR, "20260619_002255", "data_tcri-log1p_mse_task10.0", csv_file),
-    r"PhyPush ($\mathcal{L}_{\text{force}}$) world frame": os.path.join(BASE_RUN_DIR, "20260618_191529", "pinn_pcri-L1_p5c10.0", csv_file),
-    r"PhyPush ($\mathcal{L}_{\text{force}}$) local frame": os.path.join(BASE_RUN_DIR, "20260619_202230", "pinn_pcri-L1_p5c10.0", csv_file),
-    r"PhyPush ($\mathcal{L}_{\text{force}}$) local frame v2": os.path.join(BASE_RUN_DIR, "20260620_005356", "pinn_pcri-L1_p5c10.0", csv_file),
+    r"PhyPush": os.path.join(BASE_RUN_DIR, "20260619_202230", "pinn_pcri-L1_p5c10.0", csv_file),
+    f"PropPush": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/real_evaluation_summary_proppush_20260619_202230.csv",
 }
 
 # --- METRICS ---

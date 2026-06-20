@@ -14,23 +14,22 @@ from configs import CSV_PATH
 # ==========================================
 # 1. CONFIGURATION & PATHS
 # ==========================================
-OUTPUT_DIR = "paper_results/sim/attention_analysis"
+OUTPUT_DIR = "./results/paper/sim/attention_analysis"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 PLOT_SHOW = False 
 BATCH_SIZE = 64 
 
-
-# --- UPDATE THIS PATH TO MATCH YOUR TIMESTAMP RUN ---
-BASE_RUN_DIR = "/home/psxkf4/phypush_training/results/checkpoints/from_20260316_YOUR_TIMESTAMP_HERE"
+# --- FIXED PATH: Pointing to the correct PhyPush results folder ---
+BASE_RUN_DIR = "./results/checkpoints/from_20260618"
 
 # --- MANUAL MODEL SELECTION ---
-# We map to the domain_evaluation_summary.csv just as a reference point to find the checkpoint directory
+csv_file = "domain_evaluation_summary.csv"
 MODELS_TO_COMPARE = {
-    "PhyPush (Data loss)": os.path.join(BASE_RUN_DIR, "data_tcri-log1p_mse_task10.0/domain_evaluation_summary.csv"),
-    "PhyPush ($m$ best)": os.path.join(BASE_RUN_DIR, "pinn_pcri-L1_p10c10.0/domain_evaluation_summary.csv"),
-    "PhyPush ($\\mu$ best)": os.path.join(BASE_RUN_DIR, "pinn_annstartepo300_rampd600_pcri-L1_p5c10.0_p2-2c5.0/domain_evaluation_summary.csv"),
-    r"$\mathcal{L}_{\text{acc}}$": os.path.join(BASE_RUN_DIR, "pinn_pcri-L1_p10c10.0/domain_evaluation_summary.csv"),
+    # r"PhyPush ($\mathcal{L}_{\text{data}}$)": os.path.join(BASE_RUN_DIR, "20260619_002255", "data_tcri-log1p_mse_task10.0", csv_file),
+    r"PhyPush ($\mathcal{L}_{\text{force}}$) world frame": os.path.join(BASE_RUN_DIR, "20260618_191529", "pinn_pcri-L1_p5c10.0", csv_file),
+    r"PhyPush ($\mathcal{L}_{\text{force}}$) local frame": os.path.join(BASE_RUN_DIR, "20260619_202230", "pinn_pcri-L1_p5c10.0", csv_file),
+    r"PhyPush ($\mathcal{L}_{\text{force}}$) local frame v2": os.path.join(BASE_RUN_DIR, "20260620_005356", "pinn_pcri-L1_p5c10.0", csv_file),
 }
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -231,11 +230,14 @@ def main():
             config = json.load(f)
 
         # 3. Create Dataloader tailored to this config's bounds
+        # Updated to include mu_seen constraints
         _, val_loader, seq_len, _, _ = create_dataloaders(
             df_raw, 
             batch_size=BATCH_SIZE, 
             m_seen_min=config.get('m_seen_min', 0.2), 
-            m_seen_max=config.get('m_seen_max', 2.0)
+            m_seen_max=config.get('m_seen_max', 2.0),
+            mu_seen_min=config.get('mu_seen_min', 0.15),
+            mu_seen_max=config.get('mu_seen_max', 0.5)
         )
             
         # 4. Initialize Model Architecture dynamically

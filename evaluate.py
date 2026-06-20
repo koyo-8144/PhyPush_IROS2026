@@ -11,7 +11,7 @@ from sklearn.metrics import r2_score
 from models import PhysicsTransformerEstimator
 from dataset import create_dataloaders
 from utils import set_seed, clean_force_col
-from configs import M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN, M_UNSEEN_MAX, MU_UNSEEN_MAX, GLOBAL_M_RANGE, GLOBAL_MU_RANGE, GLOBAL_FRIC_RANGE, REAL_M_RANGE, REAL_MU_RANGE, REAL_FRIC_RANGE, INCLUDE_UNSEEN, CSV_PATH
+from configs import M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN, M_UNSEEN_MAX, MU_UNSEEN_MAX, GLOBAL_M_RANGE, GLOBAL_MU_RANGE, GLOBAL_FRIC_RANGE, REAL_M_RANGE, REAL_MU_RANGE, REAL_FRIC_RANGE, INCLUDE_UNSEEN, CSV_PATH, G
 
 # ==========================================
 # 1. CONFIGURATION & PATHS
@@ -21,7 +21,9 @@ SMOOTHING_WINDOW_SIZE = 3
 TOP_NUM = 10
 
 # time = "20260618_191529"
-time = "20260619_153723"
+# time = "20260619_153723"
+# time = "20260619_202230"
+time = "20260620_005356"
 model = "pinn_pcri-L1_p5c10.0"
 
 CHECKPOINT_DIR = f"./results/checkpoints/from_20260618/{time}/{model}" 
