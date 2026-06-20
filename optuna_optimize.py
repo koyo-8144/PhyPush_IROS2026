@@ -30,7 +30,7 @@ def objective(trial):
     # Suggest variables to optimize
     config['init_lr'] = trial.suggest_float('init_lr', 1e-5, 5e-3, log=True)
     config['batch_size'] = trial.suggest_categorical('batch_size', [64, 128, 256])
-    config['d_model'] = trial.suggest_categorical('d_model', [64, 128, 256])
+    # config['d_model'] = trial.suggest_categorical('d_model', [64, 128, 256])
     config['num_enc'] = trial.suggest_int('num_enc', 2, 6)
     config['dropout'] = trial.suggest_float('dropout', 0.0, 0.4)
     
@@ -381,7 +381,7 @@ if __name__ == "__main__":
     
     # 2. Define a persistent SQLite database path and a name for this study
     storage_name = "sqlite:///results/optuna/phypush_tuning.db"
-    study_name = "phypush_hyperparam_search"
+    study_name = "phypush_hyperparam_search_v2"
     
     # 3. Create or load the study using the storage
     study = optuna.create_study(
