@@ -24,6 +24,11 @@ MODELS_TO_COMPARE = {
         "force_input": "No"
     },
 
+    r"PhyPush v2": {
+        "path": os.path.join(BASE_RUN_DIR, "20260621_145920", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
+        "force_input": "No"
+    },
+
     r"PropPush": {
         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260619_202230.csv",
         "force_input": "No"

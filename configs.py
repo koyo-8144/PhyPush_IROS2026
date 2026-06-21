@@ -129,7 +129,6 @@ config_force = {
 }
 
 
-
 config_force_v2 = {
     'batch_size': 64,
     'num_epochs': 1000,
@@ -177,6 +176,58 @@ config_force_v2 = {
     'frame_mode': FRAME_MODE,
 }
 
+config_force_v3 = {
+    'batch_size': 64,
+    'num_epochs': 1000,
+    'lr_optimizer': "AdamW",
+    'lr_scheduler': "OneCycle",
+    'loss_type': "pinn",
+    'task_coeff': 0.0,
+    'task_criterion': "log1p_mse",
+    'c_entropy_coeff': 0.0,
+    'm_entropy_coeff': 0.0,
+    'f_entropy_coeff': 0.0,
+    'force_coeff': 0.0,
+    'force_criterion': "log1p_mse",
+    'd_model': 64,
+    'num_enc': 6,
+    'last_layer_ms': 3.1557037339649225,
+    'last_layer_mus': 1.3244787508344682,
+    'dropout': 0.03707939352522528,
+    'sharpness': 1.0,
+    'cross_sharpness': 7.43379868747758,
+    'm_sharpness': 9.20706918441079,
+    'mu_sharpness': 1.0318866842435197,
+    'cross_sharpness': 9.628721199478191,
+    'm_sharpness': 9.994619264743257,
+    'mu_sharpness': 7.8646360451996005,
+    'init_lr': 0.0010060140244026493,
+    'pinn_criterion': "L1",
+    'diff_coeffs_pinn4': 0,
+    'pinn_coeffs': {
+        'p1': 0.0, 'p2': 0.0, 'p2-2': 0.0, 'p3': 0.0,
+        'p4': 0.0, 'p4_1': 0.0, 'p4_2': 0.0, 'p4_3': 0.0,
+        'p5': 10.0, 'p6': 0.0, 'p7': 0.0, 'p8': 0.0,
+        'p9': 0.0, 'p9-2': 0.0, 'p9-3': 0.0,
+        'p10': 0.0, 'p11': 0.0, 'p11-2': 0.0
+    },
+    'mass_scale': 1.2296503610329115,
+    'fric_scale': 0.2826182834972651,
+    'pinn_coeff_annealing': 0,
+    'annealing_start_epoch': 300,
+    'ramp_duration': 600,
+    'm_seen_max': M_SEEN_MAX,
+    'm_seen_min': M_SEEN_MIN,
+    'mu_seen_max': MU_SEEN_MAX,
+    'mu_seen_min': MU_SEEN_MIN,
+    'acc_filter_threshold': 0.3,
+    'vel_filter_threshold': 0.01,
+    'transformer_ver': 5,
+    'frame_mode': FRAME_MODE,
+}
 
 
-used_config = config_force
+
+
+
+used_config = config_force_v3
