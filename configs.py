@@ -176,6 +176,7 @@ config_force_v2 = {
     'frame_mode': FRAME_MODE,
 }
 
+
 config_force_v3 = {
     'batch_size': 64,
     'num_epochs': 1000,
