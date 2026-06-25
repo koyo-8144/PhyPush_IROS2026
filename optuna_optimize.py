@@ -381,7 +381,7 @@ if __name__ == "__main__":
     
     # 2. Define a persistent SQLite database path and a name for this study
     storage_name = "sqlite:///results/optuna/phypush_tuning.db"
-    study_name = "phypush_hyperparam_search_v2"
+    study_name = "phypush_hyperparam_search_v3"
     
     # 3. Create or load the study using the storage
     study = optuna.create_study(

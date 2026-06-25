@@ -28,9 +28,10 @@ REAL_FRIC_RANGE = (1.856 * 0.4626 * G) - (0.175 * 0.1580 * G)
 FRAME_MODE = "local"
 
 if FRAME_MODE == "world":
-    CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_tb-3_ta57_emavel1.0_velstd0.0_broad.csv"
+    CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_tb-3_ta57_emavel1.0_velstd0.0_broad.csv" # force
 elif FRAME_MODE == "local":
-    CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_trans_cube.csv"
+    # CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_trans_cube.csv" # force_v2, force_v3
+    CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_trans_cube.csv" # force_v4
 
 
 config_data = {
@@ -231,4 +232,4 @@ config_force_v3 = {
 
 
 
-used_config = config_force_v3
+used_config = config_force_v2
