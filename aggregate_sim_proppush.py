@@ -19,20 +19,25 @@ MODELS_TO_COMPARE = {
         "path": f"/home/psxkf4/phypush_training/results/checkpoints/baseline_random_forest/{csv_file}",
         "force_input": "Yes"
     },
-    r"PhyPush": {
+    r"PhyPush open gripper": {
         "path": os.path.join(BASE_RUN_DIR, "20260619_202230", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
         "force_input": "No"
     },
 
-    r"PhyPush v2": {
-        "path": os.path.join(BASE_RUN_DIR, "20260621_145920", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
+    r"PhyPush closed gripper": {
+        "path": os.path.join(BASE_RUN_DIR, "", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
         "force_input": "No"
     },
 
-    r"PropPush": {
+    r"PropPush open gripper": {
         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260619_202230.csv",
         "force_input": "No"
     },
+
+    # r"PropPush closed gripper": {
+    #     "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260625_005028.csv",
+    #     "force_input": "No"
+    # },
 
 }
 

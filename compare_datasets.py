@@ -6,8 +6,9 @@ import seaborn as sns
 # ==========================================
 # 1. CONFIGURATION & LOAD DATA
 # ==========================================
-FILE_1 = "/home/psxkf4/IsaacLab/source/collected_data/data_tb-3_ta57_emavel1.0_velstd0.0_broad.csv"
-FILE_2 = "/home/psxkf4/IsaacLab/source/collected_data/data_trans_cube.csv"
+# FILE_1 = "/home/psxkf4/IsaacLab/source/collected_data/data_tb-3_ta57_emavel1.0_velstd0.0_broad.csv"
+FILE_1 = "/home/psxkf4/IsaacLab/source/collected_data/data_trans_cube.csv"
+FILE_2 = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper.csv"
 
 # Sequence length for time-series extraction
 SEQ_LEN = 60

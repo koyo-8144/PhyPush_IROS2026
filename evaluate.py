@@ -25,7 +25,7 @@ TOP_NUM = 10
 # time = "20260619_202230"
 # time = "20260620_005356"
 # time = "20260621_145920"
-time = "20260625_005028"
+time = ""
 model = "pinn_pcri-L1_p5c10.0"
 
 CHECKPOINT_DIR = f"./results/checkpoints/from_20260618/{time}/{model}" 
