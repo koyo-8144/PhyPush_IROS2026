@@ -25,7 +25,7 @@ MODELS_TO_COMPARE = {
     },
 
     r"PhyPush closed gripper": {
-        "path": os.path.join(BASE_RUN_DIR, "", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
+        "path": os.path.join(BASE_RUN_DIR, "20260625_165857", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
         "force_input": "No"
     },
 
