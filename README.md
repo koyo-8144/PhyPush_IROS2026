@@ -1,10 +1,10 @@
 # PhyPush_IROS2026
 
-![](imgs/phypush_pipeline_readme.png)
-
-
 A Physics-guided Transformer that estimates an object's **mass** and **friction coefficient (μ)**
 from a sequence of robotic end-effector velocity.
+
+![](imgs/phypush_pipeline_readme.png)
+
 
 <!-- ## Repository Contents
 

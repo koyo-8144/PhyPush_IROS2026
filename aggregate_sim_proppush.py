@@ -34,10 +34,10 @@ MODELS_TO_COMPARE = {
         "force_input": "No"
     },
 
-    # r"PropPush closed gripper": {
-    #     "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260625_005028.csv",
-    #     "force_input": "No"
-    # },
+    r"PropPush closed gripper": {
+        "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260625_165857.csv",
+        "force_input": "No"
+    },
 
 }
 
