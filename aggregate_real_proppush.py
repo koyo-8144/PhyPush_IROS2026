@@ -3,7 +3,7 @@ import os
 import numpy as np
 import json
 from configs import M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN, M_UNSEEN_MAX, MU_UNSEEN_MAX, GLOBAL_M_RANGE, GLOBAL_MU_RANGE, GLOBAL_FRIC_RANGE, REAL_M_RANGE, REAL_MU_RANGE, REAL_FRIC_RANGE, INCLUDE_UNSEEN
-
+from dataset import load_dataset_csv
 
 # ==========================================
 # 1. CONFIGURATION & PATHS
@@ -130,7 +130,7 @@ def load_data(models_dict):
             print(f"Warning: File not found: {csv_path}")
             continue
         try:
-            df = pd.read_csv(csv_path)
+            df = load_dataset_csv()
             df['Model'] = model_name
             combined_df = pd.concat([combined_df, df], ignore_index=True)
             print(f"Loaded {model_name}")

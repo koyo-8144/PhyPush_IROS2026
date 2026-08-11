@@ -15,6 +15,7 @@ from models import PhysicsTransformerEstimator
 from losses import log_mse_loss, PinnLossCalculator
 from dataset import create_dataloaders
 from configs import used_config, CSV_PATH
+from dataset import load_dataset_csv
 
 def main():
     set_seed(42)
@@ -23,7 +24,7 @@ def main():
         print(f"Error: File not found at {CSV_PATH}")
         return
 
-    df = pd.read_csv(CSV_PATH)
+    df = load_dataset_csv()
     if 'gt_fric_force' in df.columns:
         df['gt_fric_force'] = df['gt_fric_force'].apply(clean_force_col)
     

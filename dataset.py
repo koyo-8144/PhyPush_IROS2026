@@ -6,7 +6,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from sklearn.model_selection import train_test_split, GroupShuffleSplit
 from utils import clean_force_col
 from configs import (M_UNSEEN_MAX, MU_UNSEEN_MAX, FRAME_MODE, MULTI_ANGLE,
-                     USE_ARM_STATE, ARM_FEATURE_MODE)
+                     USE_ARM_STATE, ARM_FEATURE_MODE, CSV_PATH)
 
 # =============================================================================
 # COLUMN GROUPS WRITTEN BY THE MULTI-ANGLE SWEEP
@@ -113,6 +113,59 @@ def _report_column_availability(df):
               f"({len(ARM_STATIC_COLS)} static + {len(ARM_STATE_COLS)} state = "
               f"{len(ALL_ARM_COLS)} total, {len(ARM_FEATURE_COLS)} usable as features).")
     return have_arm
+
+
+def load_dataset_csv(csv_path=None, chunksize=50000, verbose=True):
+    """Memory-safe CSV load for TRAINING.
+
+    Unlike the loaders in inspect_dataset.py / compare_datasets.py, this one
+    keeps EVERY row and EVERY column: create_dataloaders reads the pinn_* physics
+    arrays and needs the full population, so nothing can be dropped or subsampled.
+    The savings come only from:
+
+      1. Reading in chunks so the raw file is never fully materialised as float64.
+      2. Downcasting float64 -> float32 per chunk, which halves resident memory
+         and matches the precision the tensors use downstream anyway.
+
+    A 12 GB CSV loads at roughly half the peak RAM of a plain pd.read_csv, with
+    identical contents. Works for any dataset, multi-angle or not.
+
+    Args:
+        csv_path: path to load; defaults to configs.CSV_PATH.
+        chunksize: rows per chunk. Larger = fewer concat passes but higher peak.
+        verbose: print progress.
+    """
+    path = csv_path if csv_path is not None else CSV_PATH
+
+    if verbose:
+        size_gb = os.path.getsize(path) / 1e9 if os.path.exists(path) else float('nan')
+        print(f"[load_dataset_csv] {path}  ({size_gb:.1f} GB) "
+              f"in chunks of {chunksize}, float32 downcast")
+
+    chunks = []
+    total = 0
+    for chunk in pd.read_csv(path, chunksize=chunksize):
+        float_cols = chunk.select_dtypes(include=['float64']).columns
+        chunk[float_cols] = chunk[float_cols].astype(np.float32)
+        chunks.append(chunk)
+        total += len(chunk)
+        if verbose:
+            print(f"  ... {total} rows", end='\r')
+
+    df = pd.concat(chunks, ignore_index=True)
+    del chunks  # free the per-chunk copies before create_dataloaders runs
+
+    if 'gt_fric_force' in df.columns:
+        # This column is stored as bracketed strings, so the per-chunk float
+        # downcast skipped it. Clean, then downcast the resulting float64.
+        df['gt_fric_force'] = df['gt_fric_force'].apply(clean_force_col).astype(np.float32)
+
+    if verbose:
+        mem_gb = df.memory_usage(deep=True).sum() / 1e9
+        print(f"\n[load_dataset_csv] loaded {len(df)} rows x {df.shape[1]} cols, "
+              f"~{mem_gb:.1f} GB resident")
+
+    return df
 
 
 def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0, mu_seen_min=0.15, mu_seen_max=0.5):

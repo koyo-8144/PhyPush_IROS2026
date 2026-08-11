@@ -12,7 +12,8 @@ from sklearn.model_selection import GroupShuffleSplit
 from models import PhysicsTransformerEstimator
 from dataset import create_dataloaders
 from utils import set_seed, clean_force_col
-from configs import M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN, M_UNSEEN_MAX, MU_UNSEEN_MAX, GLOBAL_M_RANGE, GLOBAL_MU_RANGE, GLOBAL_FRIC_RANGE, REAL_M_RANGE, REAL_MU_RANGE, REAL_FRIC_RANGE, INCLUDE_UNSEEN, CSV_PATH, G
+from configs import M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN, M_UNSEEN_MAX, MU_UNSEEN_MAX, GLOBAL_M_RANGE, GLOBAL_MU_RANGE, GLOBAL_FRIC_RANGE, REAL_M_RANGE, REAL_MU_RANGE, REAL_FRIC_RANGE, INCLUDE_UNSEEN, CSV_PATH, G, MULTI_ANGLE
+from dataset import load_dataset_csv
 
 # ==========================================
 # 1. CONFIGURATION & PATHS
@@ -21,9 +22,13 @@ PLOT_SHOW = False
 SMOOTHING_WINDOW_SIZE = 3
 TOP_NUM = 10
 
-time = "20260811_063229"
-# Make sure to update the model string below if MULTI_ANGLE or USE_ARM_STATE changes the folder name
-model = "pinn_pcri-L1_p5c10.0"
+if MULTI_ANGLE:
+    time = "20260811_184657"
+    model = "pinn_pcri-L1_p5c10.0_multiangle"
+else:
+    time = "20260811_063229"
+    # Make sure to update the model string below if MULTI_ANGLE or USE_ARM_STATE changes the folder name
+    model = "pinn_pcri-L1_p5c10.0"
 
 CHECKPOINT_DIR = f"./results/checkpoints/from_20260811/{time}/{model}" 
 
@@ -207,7 +212,7 @@ def main():
         print(f"Error: Dataset not found at {CSV_PATH}")
         return
         
-    df = pd.read_csv(CSV_PATH)
+    df = load_dataset_csv()
     if 'gt_fric_force' in df.columns:
         df['gt_fric_force'] = df['gt_fric_force'].apply(clean_force_col)
 
