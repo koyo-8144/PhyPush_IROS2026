@@ -13,7 +13,7 @@ G = 9.81  # Gravity constant for friction force calculation
 
 # --- UPDATE THIS PATH TO MATCH YOUR TIMESTAMP RUN ---
 # BASE_RUN_DIR = "/home/psxkf4/phypush_training/results/checkpoints/from_20260316"
-BASE_RUN_DIR = "/home/psxkf4/PhyPush/results/checkpoints/from_20260618"
+BASE_RUN_DIR = "/home/psxkf4/PhyPush/results/checkpoints/from_20260811"
 
 
 # --- REAL-WORLD FRICTION MAP ---
@@ -38,8 +38,9 @@ MU_MAP = {
 csv_file = "real_evaluation_summary.csv"
 # --- MANUAL MODEL SELECTION ---
 MODELS_TO_COMPARE = {
-    r"PhyPush": os.path.join(BASE_RUN_DIR, "20260619_202230", "pinn_pcri-L1_p5c10.0", csv_file),
-    f"PropPush": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/real_evaluation_summary_proppush_20260619_202230.csv",
+    # r"PhyPush": os.path.join(BASE_RUN_DIR, "20260619_202230", "pinn_pcri-L1_p5c10.0", csv_file),
+    # f"PropPush": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/real_evaluation_summary_proppush_20260619_202230.csv",
+    r"PhyPush arm-conditioned": os.path.join(BASE_RUN_DIR, "20260811_045311", "pinn_pcri-L1_p5c10.0_multiangle", csv_file),
 }
 
 # --- METRICS ---

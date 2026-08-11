@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score
+from sklearn.model_selection import GroupShuffleSplit
 
 from models import PhysicsTransformerEstimator
 from dataset import create_dataloaders
@@ -20,15 +21,11 @@ PLOT_SHOW = False
 SMOOTHING_WINDOW_SIZE = 3
 TOP_NUM = 10
 
-# time = "20260618_191529"
-# time = "20260619_153723"
-# time = "20260619_202230"
-# time = "20260620_005356"
-# time = "20260621_145920"
-time = "20260625_165857"
+time = "20260811_063229"
+# Make sure to update the model string below if MULTI_ANGLE or USE_ARM_STATE changes the folder name
 model = "pinn_pcri-L1_p5c10.0"
 
-CHECKPOINT_DIR = f"./results/checkpoints/from_20260618/{time}/{model}" 
+CHECKPOINT_DIR = f"./results/checkpoints/from_20260811/{time}/{model}" 
 
 WEIGHTS_PATH = os.path.join(CHECKPOINT_DIR, "transformer_epoch1000.pth")
 CONFIG_PATH = os.path.join(CHECKPOINT_DIR, "config.json")
@@ -222,6 +219,32 @@ def main():
     acc_cols = sorted([c for c in df.columns if "input_acc_" in c], key=lambda x: int(x.split('_')[-1]))
     vel_cols = sorted([c for c in df.columns if "input_vel_" in c], key=lambda x: int(x.split('_')[-1]))
 
+    # Extract the configuration flag to handle dynamic conditioning
+    use_arm_state = config.get('use_arm_state', False)
+    cond_dimension = 2 if use_arm_state else 0
+
+    # =================================================================
+    # REPLICATE ARM STATE STANDARDIZATION FROM TRAINING (IF ENABLED)
+    # =================================================================
+    if use_arm_state:
+        arm_cols = ['push_dir_b_x', 'push_dir_b_y']
+        if set(arm_cols).issubset(df.columns):
+            # Reproduce the exact train split indices using the seed to get the correct mean/std
+            groups = (df['seed'].astype(int) * 100000 + df['env_id'].astype(int)).values
+            gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+            train_idx, val_idx = next(gss.split(np.arange(len(df)), groups=groups))
+            
+            arm_raw = df[arm_cols].values.astype(np.float32)
+            arm_mean = arm_raw[train_idx].mean(axis=0, keepdims=True)
+            arm_std = arm_raw[train_idx].std(axis=0, keepdims=True) + 1e-8
+            
+            # Standardize and save back to the DataFrame for the domain loop to access
+            df['cond_x'] = (arm_raw[:, 0] - arm_mean[0, 0]) / arm_std[0, 0]
+            df['cond_y'] = (arm_raw[:, 1] - arm_mean[0, 1]) / arm_std[0, 1]
+        else:
+            df['cond_x'] = 0.0
+            df['cond_y'] = 0.0
+
     model = PhysicsTransformerEstimator(
         input_dim=1, 
         d_model=config['d_model'], 
@@ -235,7 +258,8 @@ def main():
         mu_sharpness=config['mu_sharpness'], 
         version=config['transformer_ver'],
         max_mass_scale=config['last_layer_ms'], 
-        max_mu_scale=config['last_layer_mus']
+        max_mu_scale=config['last_layer_mus'],
+        cond_dim=cond_dimension # Dynamically set to 0 or 2
     ).to(device)
 
     if os.path.exists(WEIGHTS_PATH):
@@ -280,6 +304,12 @@ def main():
         X_acc = torch.tensor(df_domain[acc_cols].values.reshape(-1, seq_len, 1)).float().to(device)
         X_vel = torch.tensor(df_domain[vel_cols].values.reshape(-1, seq_len, 1)).float().to(device)
         y_gt = torch.tensor(df_domain[['gt_mass', 'gt_mu']].values).float().to(device)
+        
+        # Conditionally handle the conditioning tensor
+        if use_arm_state:
+            b_cond = torch.tensor(df_domain[['cond_x', 'cond_y']].values).float().to(device)
+        else:
+            b_cond = None
 
         robot_fz_list, rhs_acc_list = [], []
         lhs_net_f_list, table_fz_list = [], []
@@ -301,7 +331,8 @@ def main():
 
         model.eval()
         with torch.no_grad():
-            preds, _, _ = model(X_vel)
+            # Pass the condition token to the model
+            preds, _, _ = model(X_vel, cond=b_cond)
             mass_est, mu_est = preds[:, 0], preds[:, 1]
             mass_gt, mu_gt = y_gt[:, 0], y_gt[:, 1]
 
@@ -353,7 +384,14 @@ def main():
                     vel_data = df_inf['v_y_smoothed'].values
                     X_vel_real = torch.tensor(vel_data).unsqueeze(0).unsqueeze(-1).float().to(device)
                     
-                    preds, _, _ = model(X_vel_real)
+                    # Provide an "average" normalized arm posture (zeros) if conditioning is active
+                    if use_arm_state:
+                        b_cond_real = torch.zeros((1, 2)).float().to(device)
+                    else:
+                        b_cond_real = None
+
+                    # Pass the condition token to the model
+                    preds, _, _ = model(X_vel_real, cond=b_cond_real)
                     m_est = preds[0, 0].item()
                     mu_est = preds[0, 1].item()
                     

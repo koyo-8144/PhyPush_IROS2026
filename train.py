@@ -78,6 +78,7 @@ def main():
     transformer_ver = config['transformer_ver']
     diff_coeffs_pinn4 = config['diff_coeffs_pinn4']
     frame_mode = config['frame_mode']
+    use_arm_state = config.get('use_arm_state', False)
 
     p_c = config['pinn_coeffs']
     pinn_coeff_1 = p_c['p1']
@@ -119,7 +120,7 @@ def main():
     # ==========================================
     # 2. PATHS & SAVING CONFIG
     # ==========================================
-    train_from = "from_20260618"
+    train_from = "from_20260811"
     current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     
     training_model = build_model_string(config) 
@@ -136,6 +137,9 @@ def main():
     # ==========================================
     # 3. MODEL SETUP & INIT
     # ==========================================
+    # Determine conditioning dimension based on the config flag
+    cond_dimension = 2 if use_arm_state else 0
+
     model = PhysicsTransformerEstimator(
         input_dim=1,          
         d_model=d_model,           
@@ -150,6 +154,7 @@ def main():
         version=transformer_ver,
         max_mass_scale=last_layer_ms,
         max_mu_scale=last_layer_mus,
+        cond_dim=cond_dimension, # Dynamically set to 0 or 2
     ).to(device)
 
     if lr_optimizer == "Adam":
@@ -167,7 +172,7 @@ def main():
             epochs=num_epochs, pct_start=0.1, anneal_strategy='cos'
         )
         
-    print(f"Model Initialized with input_dim=1 and seq_len={seq_len}")
+    print(f"Model Initialized with input_dim=1, seq_len={seq_len}, and cond_dim={cond_dimension}")
 
     # ==========================================
     # 4. TRAINING LOOP WITH LIVE PLOTTING & SAVING
@@ -226,11 +231,19 @@ def main():
         running_m_ent = 0.0
         running_f_ent = 0.0
         
-        for b_acc, b_vel, b_y, b_robot_fz, b_rhs_acc, b_lhs_net_f, b_table_fz, b_start_t, b_robot_fx in train_loader:
-            b_acc, b_vel, b_y = b_acc.to(device), b_vel.to(device), b_y.to(device)
-            b_robot_fz, b_rhs_acc, b_lhs_net_f, b_table_fz = b_robot_fz.to(device), b_rhs_acc.to(device), b_lhs_net_f.to(device), b_table_fz.to(device)
-            b_robot_fx = b_robot_fx.to(device)
-            b_start_t = b_start_t.to(device)
+        for batch in train_loader:
+            b_acc = batch[0].to(device)
+            b_vel = batch[1].to(device)
+            b_y = batch[2].to(device)
+            b_robot_fz = batch[3].to(device)
+            b_rhs_acc = batch[4].to(device)
+            b_lhs_net_f = batch[5].to(device)
+            b_table_fz = batch[6].to(device)
+            b_start_t = batch[7].to(device)
+            b_robot_fx = batch[8].to(device)
+            
+            # Dynamically handle the condition token
+            b_cond = batch[9].to(device) if use_arm_state else None
 
             # =======================================================
             # LOCAL FRAME ALIGNMENT FIX
@@ -241,7 +254,7 @@ def main():
 
             optimizer.zero_grad()
             
-            output, (c_weights, m_weights, f_weights), (net_f_est, fric_f_est) = model(b_vel)
+            output, (c_weights, m_weights, f_weights), (net_f_est, fric_f_est) = model(b_vel, cond=b_cond)
 
             m_gt = b_y[:, 0].unsqueeze(1)
             mu_gt = b_y[:, 1].unsqueeze(1)
@@ -466,10 +479,19 @@ def main():
         val_samples_count = 0
         
         with torch.no_grad():
-            for b_acc, b_vel, b_y, b_robot_fz, b_rhs_acc, b_lhs_net_f, b_table_fz, b_start_t, b_robot_fx in val_loader:
-                b_acc, b_vel, b_y = b_acc.to(device), b_vel.to(device), b_y.to(device)
-                b_robot_fz, b_rhs_acc, b_lhs_net_f, b_table_fz = b_robot_fz.to(device), b_rhs_acc.to(device), b_lhs_net_f.to(device), b_table_fz.to(device)
-                b_robot_fx = b_robot_fx.to(device)
+            for batch in val_loader:
+                b_acc = batch[0].to(device)
+                b_vel = batch[1].to(device)
+                b_y = batch[2].to(device)
+                b_robot_fz = batch[3].to(device)
+                b_rhs_acc = batch[4].to(device)
+                b_lhs_net_f = batch[5].to(device)
+                b_table_fz = batch[6].to(device)
+                b_start_t = batch[7].to(device)
+                b_robot_fx = batch[8].to(device)
+
+                # Dynamically handle the condition token
+                b_cond = batch[9].to(device) if use_arm_state else None
 
                 # =======================================================
                 # LOCAL FRAME ALIGNMENT FIX
@@ -478,7 +500,7 @@ def main():
                     b_robot_fz = -b_robot_fz
                 # ======================================================
 
-                output, _, (net_f_est_val, fric_f_est_val) = model(b_vel) 
+                output, _, (net_f_est_val, fric_f_est_val) = model(b_vel, cond=b_cond) 
                 
                 m_gt_val = b_y[:, 0].unsqueeze(1)
                 mu_gt_val = b_y[:, 1].unsqueeze(1)

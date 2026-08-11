@@ -58,7 +58,7 @@ MULTI_ANGLE = True
 # worst_manipulability shows no relationship with error, the extra 28 input
 # dimensions will not help.
 # =============================================================================
-USE_ARM_STATE = False
+USE_ARM_STATE = True
 
 # Which of the newly recorded quantities to condition on.
 #

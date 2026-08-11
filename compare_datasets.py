@@ -3,12 +3,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# Import dynamic ranges from your configuration
+from configs import (M_SEEN_MIN, M_SEEN_MAX, MU_SEEN_MIN, MU_SEEN_MAX, 
+                     M_UNSEEN_MAX, MU_UNSEEN_MAX)
+
 # ==========================================
 # 1. CONFIGURATION & LOAD DATA
 # ==========================================
-# FILE_1 = "/home/psxkf4/IsaacLab/source/collected_data/data_tb-3_ta57_emavel1.0_velstd0.0_broad.csv"
-FILE_1 = "/home/psxkf4/IsaacLab/source/collected_data/data_trans_cube.csv"
-FILE_2 = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper.csv"
+FILE_1 = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper.csv"
+FILE_2 = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper_multi_angle.csv"
 
 # Sequence length for time-series extraction
 SEQ_LEN = 60
@@ -18,8 +21,8 @@ df1 = pd.read_csv(FILE_1)
 df2 = pd.read_csv(FILE_2)
 
 # Assign labels for comparison
-df1['dataset_source'] = 'World frame IsaacLab Dataset'
-df2['dataset_source'] = 'Local frame IsaacLab Dataset'
+df1['dataset_source'] = 'Single-Angle Dataset'
+df2['dataset_source'] = 'Multi-Angle Dataset'
 
 # Combine for joint visualization
 df_combined = pd.concat([df1, df2], ignore_index=True)
@@ -27,6 +30,48 @@ df_combined = pd.concat([df1, df2], ignore_index=True)
 # ==========================================
 # 2. MACRO DATASET INSPECTION (Terminal)
 # ==========================================
+def analyze_domain_distributions(df, name):
+    """
+    Categorizes the dataset into Seen and Unseen domains based on configs.py
+    and prints the sample counts for each region.
+    """
+    print(f"\n[Domain Split Summary: {name}]")
+    
+    conditions = [
+        # 1. Seen Domain (Train/Val)
+        (df['gt_mass'] >= M_SEEN_MIN) & (df['gt_mass'] <= M_SEEN_MAX) & 
+        (df['gt_mu'] >= MU_SEEN_MIN) & (df['gt_mu'] <= MU_SEEN_MAX),
+        
+        # 2. OOD Mass Only
+        (df['gt_mass'] > M_SEEN_MAX) & (df['gt_mass'] <= M_UNSEEN_MAX) & 
+        (df['gt_mu'] >= MU_SEEN_MIN) & (df['gt_mu'] <= MU_SEEN_MAX),
+        
+        # 3. OOD Mu Only
+        (df['gt_mass'] >= M_SEEN_MIN) & (df['gt_mass'] <= M_SEEN_MAX) & 
+        (df['gt_mu'] > MU_SEEN_MAX) & (df['gt_mu'] <= MU_UNSEEN_MAX),
+        
+        # 4. OOD Mass & Mu
+        (df['gt_mass'] > M_SEEN_MAX) & (df['gt_mass'] <= M_UNSEEN_MAX) & 
+        (df['gt_mu'] > MU_SEEN_MAX) & (df['gt_mu'] <= MU_UNSEEN_MAX)
+    ]
+    
+    choices = [
+        '1. Seen (Train/Val)', 
+        '2. OOD Mass Only', 
+        '3. OOD Mu Only', 
+        '4. OOD Mass & Mu'
+    ]
+    
+    df_domain = df.copy()
+    df_domain['domain_label'] = np.select(conditions, choices, default='5. Discarded (Too High / Too Low)')
+    
+    summary = df_domain['domain_label'].value_counts().sort_index()
+    total = len(df_domain)
+    
+    for idx, count in summary.items():
+        pct = (count / total) * 100
+        print(f"  {idx:<35}: {count:>6} samples ({pct:>5.1f}%)")
+
 def print_summary(df, name):
     print(f"\n{'='*50}")
     print(f"DATASET SUMMARY: {name}")
@@ -46,11 +91,22 @@ def print_summary(df, name):
     if 'gt_mass' in df.columns and 'gt_mu' in df.columns:
         display_cols = ['gt_mass', 'gt_mu', 'start_t']
         print(df[display_cols].describe().round(4))
+        
+        # --- NEW ADDITION: Unique (Mass, Mu) Pairs ---
+        unique_pairs = df[['gt_mass', 'gt_mu']].drop_duplicates().shape[0]
+        avg_per_pair = len(df) / unique_pairs if unique_pairs > 0 else 0
+        print(f"\nUnique (Mass, Mu) Pairs: {unique_pairs}")
+        print(f"Average Trajectories per Pair: {avg_per_pair:.1f}")
+        # ---------------------------------------------
     else:
         print("Target columns (gt_mass, gt_mu) not found.")
 
-print_summary(df1, "Dataset 1 (World frame)")
-print_summary(df2, "Dataset 2 (Local frame)")
+    # Call the new domain distribution function
+    analyze_domain_distributions(df, name)
+
+
+print_summary(df1, "Dataset 1 (Single-Angle)")
+print_summary(df2, "Dataset 2 (Multi-Angle)")
 
 # Compare Columns
 cols1 = set(df1.columns)
@@ -140,12 +196,12 @@ if len(vel_cols) >= SEQ_LEN:
     axes[0].plot(time_steps, sample1.mean(axis=0), color='black', linewidth=2, label='Mean Velocity')
     axes[1].plot(time_steps, sample2.mean(axis=0), color='black', linewidth=2, label='Mean Velocity')
     
-    axes[0].set_title(f"Dataset 1: Kinematic Velocity Profiles ({sample_size} samples)")
+    axes[0].set_title(f"Dataset 1: Single-Angle Velocity Profiles ({sample_size} samples)")
     axes[0].set_xlabel("Time Step")
     axes[0].set_ylabel("Velocity")
     axes[0].legend()
     
-    axes[1].set_title(f"Dataset 2: Kinematic Velocity Profiles ({sample_size} samples)")
+    axes[1].set_title(f"Dataset 2: Multi-Angle Velocity Profiles ({sample_size} samples)")
     axes[1].set_xlabel("Time Step")
     axes[1].legend()
     
@@ -201,8 +257,8 @@ def compare_aligned_trajectories(df1, df2, df_combined, vel_cols, num_samples=5)
         print(f"Dataset 2 Match | Mass: {m2:.4f}, Mu: {mu2:.4f}")
 
         ax = axes[i]
-        ax.plot(time_steps, seq1, label=f"DS1 (Prev): m={m1:.2f}, mu={mu1:.2f}", color='blue', linewidth=2)
-        ax.plot(time_steps, seq2, label=f"DS2 (Curr): m={m2:.2f}, mu={mu2:.2f}", color='red', linewidth=2, linestyle='--')
+        ax.plot(time_steps, seq1, label=f"DS1 (Single): m={m1:.2f}, mu={mu1:.2f}", color='blue', linewidth=2)
+        ax.plot(time_steps, seq2, label=f"DS2 (Multi): m={m2:.2f}, mu={mu2:.2f}", color='red', linewidth=2, linestyle='--')
         
         ax.set_title(f"Target Anchor: Mass={target_mass:.2f}kg, Mu={target_mu:.2f}")
         ax.set_ylabel("Input Velocity")

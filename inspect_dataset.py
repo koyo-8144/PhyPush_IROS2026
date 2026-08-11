@@ -84,7 +84,6 @@ def report_arm_columns(df):
     print(f"\n  {len(present)} arm columns present:\n")
     print(stats.to_string())
 
-    # Constant columns carry no signal.
     const_cols = stats.index[stats['std'] < 1e-8].tolist()
     if const_cols:
         print(f"\n  [NOTE] Exactly constant columns: {const_cols}")
@@ -92,8 +91,6 @@ def report_arm_columns(df):
             print("         push_start_reached_flag is expected to be constant 1.0 -- "
                   "the CSV writer drops any row where it was 0.")
 
-    # Relative check catches constants in disguise: a column with std 3e-5 about
-    # a mean of -1.0 is fixed, even though its absolute std is not tiny.
     rel = (stats['std'] / stats['mean'].abs().clip(lower=1e-12)).sort_values()
     dead = rel[rel < 1e-3]
     if len(dead):
@@ -104,12 +101,6 @@ def report_arm_columns(df):
 
     print(f"\n  ARM_FEATURE_COLS in use: {len(ARM_FEATURE_COLS)}")
 
-    # How much does the arm actually change across the sweep?
-    #
-    # IMPORTANT: group by (yaw x push side), not yaw alone. Push sides 0 and 1
-    # place the arm on opposite sides of the object, so averaging over them
-    # cancels most of the variation and makes the arm look far more static
-    # than it is.
     if {'obj_yaw_base', 'push_face_index'}.issubset(df.columns):
         by_cell = df.groupby(['obj_yaw_base', 'push_face_index'])[
             ['worst_manipulability', 'ee_position_error', 'arm_q0', 'push_dir_b_y']
@@ -135,7 +126,6 @@ def report_arm_columns(df):
 
     print("=" * 70 + "\n")
 
-    # Visual
     if 'obj_yaw_base' in df.columns and 'push_face_index' in df.columns:
         sns.set_theme(style="whitegrid")
         fig, axes = plt.subplots(1, 3, figsize=(18, 5))
@@ -162,29 +152,16 @@ def report_arm_columns(df):
 
 # =============================================================================
 # PER-PLOT NUMERIC ANALYSIS
-#
-# Each function mirrors one of the five plots in inspect_dataloader(), turning
-# the visual check into numbers you can scan across many samples. Every line
-# ends in a verdict so a bad sample is obvious without reading the figure.
 # =============================================================================
 
-TARGET_PUSH_SPEED = 0.08     # m/s, from self.target_velocity in the action term
-
+TARGET_PUSH_SPEED = 0.08     
 
 def _verdict(ok, bad="CHECK"):
     return "OK" if ok else f"*** {bad} ***"
 
-
 def analyze_velocity(vel, sample_id):
-    """PLOT 1 -- extracted EE velocity.
-
-    The push is commanded at a constant 0.08 m/s, so a healthy window shows a
-    rise followed by a flat plateau. A plateau far from target means the arm
-    never tracked the commanded velocity; a non-flat one means it was still
-    accelerating, or was disturbed mid-push.
-    """
     T = len(vel)
-    tail = vel[T // 2:]                       # second half = expected plateau
+    tail = vel[T // 2:]                       
     plateau, plateau_std = float(tail.mean()), float(tail.std())
     err_pct = 100 * abs(plateau - TARGET_PUSH_SPEED) / TARGET_PUSH_SPEED
     flat_pct = 100 * plateau_std / max(abs(plateau), 1e-9)
@@ -202,23 +179,12 @@ def analyze_velocity(vel, sample_id):
         print(f"    [NOTE] velocity goes negative (min {vel.min():.4f}) -- retraction "
               f"or a frame-sign issue has leaked into the window")
 
-
 def analyze_acceleration(acc, sample_id):
-    """PLOT 2 -- extracted EE acceleration.
-
-    The extraction window is anchored on argmin of this signal, which is meant
-    to be the impact transient. Two things matter: the peak must be a clear
-    outlier (not one of several similar dips), and the tail should be near zero
-    because the push is constant-velocity after contact.
-    """
     T = len(acc)
     peak_idx = int(np.argmin(acc))
     peak_val = float(acc[peak_idx])
     tail_mean = float(np.abs(acc[T // 2:]).mean())
 
-    # How distinctive is the peak? Compare against the next-deepest dip at least
-    # 5 samples away -- a near-tie means argmin could flip between runs, which
-    # would silently shift the extracted window.
     mask = np.ones(T, dtype=bool)
     mask[max(0, peak_idx - 5):min(T, peak_idx + 6)] = False
     runner_up = float(acc[mask].min()) if mask.any() else float("nan")
@@ -234,13 +200,7 @@ def analyze_acceleration(acc, sample_id):
         print("    [NOTE] the impact peak is not a clear outlier -- the window anchor "
               "could shift between otherwise identical pushes")
 
-
 def analyze_force_decomposition(net_sim, f_robot, f_fric_vec, f_calc, sample_id):
-    """PLOT 3 -- force decomposition.
-
-    Checks whether F_robot - F_fric reconstructs the simulator's net force. A
-    large residual means a contact component is missing from the bookkeeping.
-    """
     rmse = float(np.sqrt(((f_calc - net_sim) ** 2).mean()))
     scale = float(np.abs(net_sim).mean()) + 1e-9
     corr = float(np.corrcoef(f_calc, net_sim)[0, 1]) if np.std(f_calc) > 1e-12 else float("nan")
@@ -253,18 +213,10 @@ def analyze_force_decomposition(net_sim, f_robot, f_fric_vec, f_calc, sample_id)
           f"{_verdict(rmse / scale < 0.25)}")
     print(f"    correlation        : {corr:+.4f}    {_verdict(corr > 0.8)}")
 
-
 def analyze_newton(net_sim, m_a, acc_sim, gt_mass, sample_id):
-    """PLOT 4 -- Newton's second law.
-
-    F_net should equal m*a. The residual bounds how well ANY estimator could do
-    on this sample: if the recorded physics does not close, mass is not
-    identifiable from these signals no matter what the network learns.
-    """
     rmse = float(np.sqrt(((net_sim - m_a) ** 2).mean()))
     scale = float(np.abs(net_sim).mean()) + 1e-9
 
-    # Mass implied by the data, least squares through the origin: m = <a,F>/<a,a>
     implied_mass = float(acc_sim.dot(net_sim) / (acc_sim.dot(acc_sim) + 1e-12))
     mass_err_pct = 100 * abs(implied_mass - gt_mass) / max(gt_mass, 1e-9)
 
@@ -278,21 +230,11 @@ def analyze_newton(net_sim, m_a, acc_sim, gt_mass, sample_id):
         print("    [NOTE] the recorded physics does not close here -- this bounds the "
               "achievable estimation accuracy regardless of the model")
 
-
 def analyze_friction(fric_calc, fric_sim, normal_sim, gt_mu, sample_id):
-    """PLOT 5 -- Coulomb friction model.
-
-    Two independent friction magnitudes should agree: mu * N_calc (normal force
-    inferred from weight minus the robot's vertical force) and mu * N_sim
-    (normal force from the contact sensor). Their ratio is the ratio of the two
-    normal forces, so a systematic offset points at normal-force bookkeeping.
-    """
     rmse = float(np.sqrt(((fric_calc - fric_sim) ** 2).mean()))
     scale = float(np.abs(fric_sim).mean()) + 1e-9
     ratio = float(fric_calc.mean() / (fric_sim.mean() + 1e-9))
 
-    # mu implied by the sensor: |F_fric| / N. Should recover gt_mu by construction,
-    # so a mismatch means the normal force or the friction channel is misread.
     valid = np.abs(normal_sim) > 1e-6
     if valid.any():
         implied_mu = float((fric_sim[valid] / np.abs(normal_sim[valid])).mean())
@@ -311,69 +253,83 @@ def analyze_friction(fric_calc, fric_sim, normal_sim, gt_mu, sample_id):
           f"{_verdict(rmse / scale < 0.25)}")
 
 
-def inspect_dataloader(loader, num_samples=3):
-    batch = next(iter(loader))
-
-    # When USE_ARM_STATE is True the dataset yields a 10th tensor.
-    if USE_ARM_STATE:
-        (X_acc, X_vel, y, fz_robot_sim, acc_x_sim, net_fx_sim,
-         fz_normal_sim, start_t, fx_robot_sim, arm_feat) = batch
-        print(f"[ARM_STATE] batch arm feature shape: {tuple(arm_feat.shape)}")
-    else:
-        (X_acc, X_vel, y, fz_robot_sim, acc_x_sim, net_fx_sim,
-         fz_normal_sim, start_t, fx_robot_sim) = batch
-    
-    X_acc = X_acc.numpy()
-    X_vel = X_vel.numpy()
-    y = y.numpy()
-    fz_robot_sim = fz_robot_sim.numpy()
-    acc_x_sim = acc_x_sim.numpy()
-    net_fx_sim = net_fx_sim.numpy()
-    fz_normal_sim = fz_normal_sim.numpy()
-    fx_robot_sim = fx_robot_sim.numpy()
-    
-    seq_len = X_vel.shape[1]
+def inspect_samples(df, num_samples=3):
+    """
+    Extracts elements directly from the DataFrame instead of the PyTorch DataLoader 
+    so we can access raw object yaws and unstandardized arm states safely.
+    Samples are evenly spaced to ensure variety in object yaw.
+    """
+    acc_cols = sorted([c for c in df.columns if "input_acc_" in c], key=lambda x: int(x.split('_')[-1]))
+    vel_cols = sorted([c for c in df.columns if "input_vel_" in c], key=lambda x: int(x.split('_')[-1]))
+    seq_len = len(acc_cols)
     time_steps = np.arange(seq_len)
     
-    # Tableau 10 color palette for high contrast and academic readability
     colors = {
-        'vel': '#1f77b4',       # Muted Blue
-        'acc': '#d62728',       # Brick Red
-        'robot': '#2ca02c',     # Forest Green
-        'friction': '#ff7f0e',  # Safety Orange
-        'net_sim': '#7f7f7f',   # Neutral Grey
-        'net_calc': '#9467bd',  # Muted Purple
-        'theory': '#17becf'     # Cyan
+        'vel': '#1f77b4',       
+        'acc': '#d62728',       
+        'robot': '#2ca02c',     
+        'friction': '#ff7f0e',  
+        'net_sim': '#7f7f7f',   
+        'net_calc': '#9467bd',  
+        'theory': '#17becf'     
     }
     
     sns.set_theme(style="whitegrid")
     
-    for i in range(min(num_samples, X_vel.shape[0])):
-        fig, axes = plt.subplots(5, 1, figsize=(14, 20), sharex=False)
+    # Grab evenly spaced indices to avoid looking only at the very first yaw
+    sample_indices = np.linspace(0, len(df) - 1, min(num_samples, len(df)), dtype=int)
+    
+    for i in sample_indices:
+        row = df.iloc[i]
         
-        gt_mass = y[i, 0]
-        gt_mu = y[i, 1]
+        gt_mass = row['gt_mass']
+        gt_mu = row['gt_mu']
+        
+        # Raw kinematics mapping
+        yaw_base = row['obj_yaw_base'] if 'obj_yaw_base' in row else float('nan')
+
+        vel_x = row[vel_cols].values.astype(float)
+        acc_x = row[acc_cols].values.astype(float)
+        
+        st = int(row['start_t'])
+        window_range = range(st, st + seq_len)
+
+        # Force mapping dependent on framework
+        if FRAME_MODE == "world":
+            fz_robot_sim = np.array([row[f"pinn_robot_wrench_t{t}_ax5"] for t in window_range])
+            acc_x_sim = np.array([row[f"pinn_RHS_acc_t{t}_ax3"] for t in window_range])
+            net_fx_sim = np.array([row[f"pinn_LHS_wrench_t{t}_ax3"] for t in window_range])
+            fz_normal_sim = np.array([row[f"pinn_table_wrench_t{t}_ax5"] for t in window_range])
+            fx_robot_sim = np.array([row[f"pinn_robot_wrench_t{t}_ax3"] for t in window_range])
+        elif FRAME_MODE == "local":
+            fz_robot_sim = np.array([row[f"pinn_robot_wrench_t{t}_ax3"] for t in window_range])
+            acc_x_sim = np.array([row[f"pinn_RHS_acc_t{t}_ax5"] for t in window_range])
+            net_fx_sim = np.array([row[f"pinn_LHS_wrench_t{t}_ax5"] for t in window_range])
+            fz_normal_sim = np.array([row[f"pinn_table_wrench_t{t}_ax3"] for t in window_range])
+            fx_robot_sim = np.array([row[f"pinn_robot_wrench_t{t}_ax5"] for t in window_range])
+
+        yaw_title_str = f"| Yaw: {np.degrees(yaw_base):.1f}°" if not np.isnan(yaw_base) else ""
+        
+        fig, axes = plt.subplots(5, 1, figsize=(14, 20), sharex=False)
         
         # -----------------------------------------------------------
         # PLOT 1: Velocity
         # -----------------------------------------------------------
-        vel_x = X_vel[i, :, 0]
         axes[0].plot(time_steps, vel_x, color=colors['vel'], marker='o', markersize=4, linewidth=2, label='Extracted EE Velocity')
-        axes[0].set_title("1. Model Input: Kinematics (Velocity)")
+        axes[0].set_title(f"1. Model Input: Kinematics (Velocity) {yaw_title_str}")
         axes[0].set_ylabel("Velocity [m/s]")
         axes[0].legend(loc='upper left')
 
         print("\n" + "=" * 70)
-        print(f"SAMPLE {i}  |  gt_mass = {gt_mass:.4f} kg   gt_mu = {gt_mu:.4f}")
+        print(f"SAMPLE {i}  |  gt_mass = {gt_mass:.4f} kg   gt_mu = {gt_mu:.4f}   yaw_base = {yaw_base:.4f} rad")
         print("=" * 70)
         analyze_velocity(vel_x, i)
         
         # -----------------------------------------------------------
         # PLOT 2: Acceleration
         # -----------------------------------------------------------
-        acc_x = X_acc[i, :, 0]
         axes[1].plot(time_steps, acc_x, color=colors['acc'], marker='o', markersize=4, linewidth=2, label='Extracted EE Acceleration')
-        axes[1].set_title("2. Model Input: Kinematics (Acceleration)")
+        axes[1].set_title(f"2. Model Input: Kinematics (Acceleration) {yaw_title_str}")
         axes[1].set_ylabel("Acceleration [m/s\u00b2]")
         axes[1].legend(loc='upper left')
 
@@ -383,45 +339,44 @@ def inspect_dataloader(loader, num_samples=3):
         # PHYSICS CALCULATIONS
         # -----------------------------------------------------------
         if FRAME_MODE == "world":
-            normal_force_calc = np.clip((gt_mass * G) - fz_robot_sim[i], 0.0, None)
+            normal_force_calc = np.clip((gt_mass * G) - fz_robot_sim, 0.0, None)
         elif FRAME_MODE == "local":
-            normal_force_calc = np.clip((gt_mass * G) + fz_robot_sim[i], 0.0, None)
-        fric_magnitude_calc = gt_mu * normal_force_calc 
-        fric_magnitude_sim = gt_mu * np.abs(fz_normal_sim[i])
+            normal_force_calc = np.clip((gt_mass * G) + fz_robot_sim, 0.0, None)
         
-        # Friction vector opposes the direction of motion (push is +X, friction is -X)
+        fric_magnitude_calc = gt_mu * normal_force_calc 
+        fric_magnitude_sim = gt_mu * np.abs(fz_normal_sim)
+        
         fx_friction_vector = -fric_magnitude_sim
-        calc_net_force_x = fx_robot_sim[i] + fx_friction_vector
-        mass_x_accel = gt_mass * acc_x_sim[i]
+        calc_net_force_x = fx_robot_sim + fx_friction_vector
+        mass_x_accel = gt_mass * acc_x_sim
         
         # -----------------------------------------------------------
         # PLOT 3: Force Decomposition
         # -----------------------------------------------------------
-        axes[2].plot(time_steps, net_fx_sim[i], label=r'Simulator Net Force ($F_{net}$)', color=colors['net_sim'], linewidth=4, alpha=0.4)
-        axes[2].plot(time_steps, fx_robot_sim[i], label=r'Robot Applied Force ($F_{robot}$)', color=colors['robot'], linewidth=2)
+        axes[2].plot(time_steps, net_fx_sim, label=r'Simulator Net Force ($F_{net}$)', color=colors['net_sim'], linewidth=4, alpha=0.4)
+        axes[2].plot(time_steps, fx_robot_sim, label=r'Robot Applied Force ($F_{robot}$)', color=colors['robot'], linewidth=2)
         axes[2].plot(time_steps, fx_friction_vector, label=r'Table Friction ($-F_{fric}$)', color=colors['friction'], linewidth=2)
         axes[2].plot(time_steps, calc_net_force_x, label=r'Calculated Net Force ($F_{robot} - F_{fric}$)', color=colors['net_calc'], linestyle='--', linewidth=2)
         
-        axes[2].set_title("3. Force Components Decomposition (X-Axis)")
+        axes[2].set_title(f"3. Force Components Decomposition (X-Axis) {yaw_title_str}")
         axes[2].set_ylabel("Force [N]")
         axes[2].legend(loc='upper left')
 
-        analyze_force_decomposition(net_fx_sim[i], fx_robot_sim[i],
-                                    fx_friction_vector, calc_net_force_x, i)
+        analyze_force_decomposition(net_fx_sim, fx_robot_sim, fx_friction_vector, calc_net_force_x, i)
         
         # -----------------------------------------------------------
         # PLOT 4: Newton's Second Law Check
         # -----------------------------------------------------------
-        axes[3].plot(time_steps, net_fx_sim[i], label=r'Simulator Net Force ($F_{net}$)', color=colors['net_sim'], linewidth=4, alpha=0.4)
+        axes[3].plot(time_steps, net_fx_sim, label=r'Simulator Net Force ($F_{net}$)', color=colors['net_sim'], linewidth=4, alpha=0.4)
         axes[3].plot(time_steps, calc_net_force_x, label=r'Force Sum ($F_{robot} - F_{fric}$)', color=colors['net_calc'], linewidth=2)
         axes[3].plot(time_steps, mass_x_accel, label=r"Newton's 2nd Law ($m \cdot a_x$)", color=colors['theory'], linestyle='--', linewidth=2.5)
         
-        axes[3].set_title("4. Physics Check: Newton's 2nd Law Alignment")
+        axes[3].set_title(f"4. Physics Check: Newton's 2nd Law Alignment {yaw_title_str}")
         axes[3].set_ylabel("Force [N]")
-        add_min_max_text(axes[3], net_fx_sim[i], "N")
+        add_min_max_text(axes[3], net_fx_sim, "N")
         axes[3].legend(loc='upper left')
 
-        analyze_newton(net_fx_sim[i], mass_x_accel, acc_x_sim[i], gt_mass, i)
+        analyze_newton(net_fx_sim, mass_x_accel, acc_x_sim, gt_mass, i)
     
         # -----------------------------------------------------------
         # PLOT 5: Friction Model Check
@@ -429,22 +384,84 @@ def inspect_dataloader(loader, num_samples=3):
         axes[4].plot(time_steps, fric_magnitude_calc, label=r'Theoretical Friction ($\mu \cdot N_{calc}$)', color=colors['theory'], linewidth=2)
         axes[4].plot(time_steps, fric_magnitude_sim, label=r'Simulator Friction ($\mu \cdot N_{sim}$)', color=colors['friction'], linestyle='--', linewidth=2.5)
         
-        axes[4].set_title("5. Physics Check: Coulomb Friction Model (Magnitudes)")
+        axes[4].set_title(f"5. Physics Check: Coulomb Friction Model (Magnitudes) {yaw_title_str}")
         axes[4].set_ylabel("Force Magnitude [N]")
         axes[4].set_xlabel("Time Step")
         add_min_max_text(axes[4], fric_magnitude_calc, "N")
         axes[4].legend(loc='upper left')
 
-        analyze_friction(fric_magnitude_calc, fric_magnitude_sim,
-                         fz_normal_sim[i], gt_mu, i)
+        analyze_friction(fric_magnitude_calc, fric_magnitude_sim, fz_normal_sim, gt_mu, i)
         print()
         
         for ax in axes:
             ax.grid(True, linestyle=':', alpha=0.6)
             
-        plt.tight_layout()
+        fig.tight_layout()
         plt.show()
 
+def inspect_velocity_vs_yaw(df):
+    """
+    Finds a specific set of physical properties (same ground truth mass and mu)
+    that has multiple object yaw variations and both push faces. 
+    Plots their EE velocity sequences separated by push_face_index to visualize 
+    the variance caused strictly by the robot's kinematic configuration.
+    """
+    if 'obj_yaw_base' not in df.columns or 'push_face_index' not in df.columns:
+        print("[WARNING] Missing obj_yaw_base or push_face_index column. Cannot plot velocity vs yaw.")
+        return
+
+    # Group by physical properties to find a set that contains a full multi-angle sweep
+    grouped = df.groupby(['gt_mass', 'gt_mu'])
+    
+    target_group = None
+    for name, group in grouped:
+        # Look for a physical property pair that has a diverse spread of orientations
+        # AND contains pushes from both faces
+        if group['obj_yaw_base'].nunique() > 5 and group['push_face_index'].nunique() > 1:
+            target_group = group
+            break
+            
+    if target_group is None:
+        print("[WARNING] Could not find a (mass, mu) pair with multiple yaw angles and both push faces.")
+        return
+
+    gt_mass = target_group.iloc[0]['gt_mass']
+    gt_mu = target_group.iloc[0]['gt_mu']
+    
+    vel_cols = sorted([c for c in df.columns if "input_vel_" in c], key=lambda x: int(x.split('_')[-1]))
+    seq_len = len(vel_cols)
+    time_steps = np.arange(seq_len)
+    
+    # Sort to ensure colormap maps cleanly
+    target_group = target_group.sort_values('obj_yaw_base')
+    
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+    
+    norm = plt.Normalize(target_group['obj_yaw_base'].min(), target_group['obj_yaw_base'].max())
+    sm = plt.cm.ScalarMappable(cmap='twilight', norm=norm)
+    
+    for face_idx in [0, 1]:
+        ax = axes[face_idx]
+        sub_group = target_group[target_group['push_face_index'] == face_idx]
+        
+        for _, row in sub_group.iterrows():
+            vel_x = row[vel_cols].values.astype(float)
+            yaw = row['obj_yaw_base']
+            ax.plot(time_steps, vel_x, color=sm.to_rgba(yaw), linewidth=2, alpha=0.8)
+            
+        ax.set_title(f"Push Face Index: {face_idx}")
+        ax.set_xlabel("Time Step")
+        if face_idx == 0:
+            ax.set_ylabel("Extracted EE Velocity [m/s]")
+        ax.grid(True, linestyle=':', alpha=0.6)
+        
+    # Add a single colorbar for both subplots
+    cbar = fig.colorbar(sm, ax=axes, orientation='vertical', fraction=0.02, pad=0.04)
+    cbar.set_label('Object Yaw Base (rad)')
+    
+    fig.suptitle(f"EE Velocity Sequence vs Object Yaw & Push Face\nFixed Properties: Mass = {gt_mass:.4f} kg, Mu = {gt_mu:.4f}")
+    
+    plt.show()
 
 def main():
     if not os.path.exists(CSV_PATH):
@@ -495,12 +512,18 @@ def main():
         report_multi_angle_coverage(df)
         report_arm_columns(df)
     
-    train_loader, val_loader, seq_len, df_filtered, choices = create_dataloaders(
+    # We only need the DataFrame filtered by domain for this script
+    _, _, seq_len, df_filtered, _ = create_dataloaders(
         df, batch_size=64, m_seen_min=M_SEEN_MIN, m_seen_max=M_SEEN_MAX, mu_seen_min=MU_SEEN_MIN, mu_seen_max=MU_SEEN_MAX
     )
     
-    print(f"Inspecting training dataloader batches...")
-    inspect_dataloader(train_loader, num_samples=3)
+    print(f"Inspecting training dataloader batches natively from DataFrame...")
+    inspect_samples(df_filtered, num_samples=3)
+    
+    if MULTI_ANGLE:
+        print("\nPlotting EE Velocity Variance vs Object Yaw...")
+        inspect_velocity_vs_yaw(df_filtered)
+
 
 if __name__ == "__main__":
     main()
