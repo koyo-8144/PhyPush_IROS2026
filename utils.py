@@ -74,4 +74,9 @@ def build_model_string(config):
             if val != 0.0:
                 parts.append(f"{key}c{val}") 
 
+    # Tag the dataset variant so multi-angle runs do not collide with
+    # single-orientation runs that share the same loss configuration.
+    if config.get('multi_angle', False):
+        parts.append("multiangle")
+
     return "_".join(parts)

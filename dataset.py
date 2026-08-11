@@ -3,9 +3,117 @@ import torch
 import numpy as np
 import pandas as pd
 from torch.utils.data import TensorDataset, DataLoader
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GroupShuffleSplit
 from utils import clean_force_col
-from configs import M_UNSEEN_MAX, MU_UNSEEN_MAX, FRAME_MODE
+from configs import (M_UNSEEN_MAX, MU_UNSEEN_MAX, FRAME_MODE, MULTI_ANGLE,
+                     USE_ARM_STATE, ARM_FEATURE_MODE)
+
+# =============================================================================
+# COLUMN GROUPS WRITTEN BY THE MULTI-ANGLE SWEEP
+# (_save_offline_data_csv in phypush_distillation.py)
+# =============================================================================
+
+# Provenance: which sweep cell and which physical sample this row came from.
+MULTI_ANGLE_COLS = ['obj_yaw_base', 'push_face_index', 'collect_idx', 'seed', 'env_id']
+
+# Static per-push arm summary, from _arm_static_summary (5 values).
+ARM_STATIC_COLS = [
+    'worst_manipulability',    # min sqrt(det(J J^T)) over the push
+    'ee_position_error',       # |push_end_goal - actual_ee_end|
+    'push_start_reached_flag', # 1.0 for every saved row (see note below)
+    'push_dir_b_x',            # push heading in the robot base frame
+    'push_dir_b_y',
+]
+
+# Arm configuration sampled at the impact index, from _arm_state_a_his (24 values).
+ARM_STATE_COLS = (
+    [f'arm_q{j}' for j in range(7)]                   # joint positions
+    + [f'arm_qd{j}' for j in range(7)]                # joint velocities
+    + [f'arm_ee_pos_{ax}' for ax in ('x', 'y', 'z')]  # EE position, base frame
+    + [f'arm_ee_rot6d_{j}' for j in range(6)]         # EE rotation, 6D
+    + ['arm_manip_at_impact']                         # manipulability at impact
+)
+
+ALL_ARM_COLS = ARM_STATIC_COLS + ARM_STATE_COLS
+
+# Columns usable as model conditioning features.
+#
+# push_start_reached_flag is EXCLUDED: _save_offline_data_csv skips any row where
+# push_start_reached or push_end_reached is 0, so every surviving row carries
+# 1.0. It is a constant -- no signal, and a divide-by-~0 during standardization.
+ARM_FEATURE_COLS = [c for c in ARM_STATIC_COLS if c != 'push_start_reached_flag'] + ARM_STATE_COLS
+
+# Minimal subset worth trying before the full 28. Two numbers describe the arm's
+# reach direction; one describes how degraded the Jacobian got during the push.
+ARM_FEATURE_COLS_MINIMAL = ['worst_manipulability', 'push_dir_b_x', 'push_dir_b_y']
+
+
+# Conditioning presets selected by ARM_FEATURE_MODE in configs.py.
+ARM_FEATURE_PRESETS = {
+    # Push heading as a unit vector in the robot base frame. One concept,
+    # two components. The most complete single descriptor of arm reach.
+    "push_dir":       ['push_dir_b_x', 'push_dir_b_y'],
+    # Strictly one scalar: how degraded the Jacobian got during the push.
+    "manipulability": ['worst_manipulability'],
+    # Both of the above.
+    "minimal":        ARM_FEATURE_COLS_MINIMAL,
+    # Everything: joint positions, joint velocities, EE pose, manipulability.
+    "full":           ARM_FEATURE_COLS,
+}
+
+
+def get_arm_feature_cols():
+    """Feature list selected by ARM_FEATURE_MODE in configs.py."""
+    if ARM_FEATURE_MODE not in ARM_FEATURE_PRESETS:
+        raise ValueError(
+            f"Unknown ARM_FEATURE_MODE: {ARM_FEATURE_MODE!r}. "
+            f"Expected one of {sorted(ARM_FEATURE_PRESETS)}."
+        )
+    return list(ARM_FEATURE_PRESETS[ARM_FEATURE_MODE])
+
+
+# Conditioning width, for `cond_dim` when constructing the model.
+ARM_DIM = len(ARM_FEATURE_PRESETS.get(ARM_FEATURE_MODE, []))
+
+
+def _build_property_groups(df_filtered):
+    """Group key identifying one physical (mass, mu) pair.
+
+    In the multi-angle dataset the same pair is observed ~20 times (10 object
+    yaws x 2 push sides). Properties are determined by (seed, env_id), so that
+    pair is the natural group. Falls back to the rounded property values if the
+    provenance columns are absent.
+    """
+    if 'seed' in df_filtered.columns and 'env_id' in df_filtered.columns:
+        return (df_filtered['seed'].astype(int) * 100000
+                + df_filtered['env_id'].astype(int)).values, "seed+env_id"
+
+    return (df_filtered['gt_mass'].round(6).astype(str) + "_"
+            + df_filtered['gt_mu'].round(6).astype(str)).values, "gt_mass+gt_mu"
+
+
+def _report_column_availability(df):
+    """Warn early about missing sweep columns rather than failing deep in a loop."""
+    missing_meta = [c for c in MULTI_ANGLE_COLS if c not in df.columns]
+    missing_static = [c for c in ARM_STATIC_COLS if c not in df.columns]
+    missing_state = [c for c in ARM_STATE_COLS if c not in df.columns]
+
+    if missing_meta:
+        print(f"[MULTI_ANGLE][WARNING] Missing provenance columns {missing_meta}.")
+        print( "                       Group split will fall back to (gt_mass, gt_mu).")
+    if missing_static:
+        print(f"[MULTI_ANGLE][WARNING] Missing arm static columns {missing_static}.")
+    if missing_state:
+        print(f"[MULTI_ANGLE][WARNING] Missing {len(missing_state)} arm state columns, "
+              f"e.g. {missing_state[:5]}.")
+
+    have_arm = not (missing_static or missing_state)
+    if have_arm:
+        print(f"[MULTI_ANGLE] Arm columns present "
+              f"({len(ARM_STATIC_COLS)} static + {len(ARM_STATE_COLS)} state = "
+              f"{len(ALL_ARM_COLS)} total, {len(ARM_FEATURE_COLS)} usable as features).")
+    return have_arm
+
 
 def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0, mu_seen_min=0.15, mu_seen_max=0.5):
     m_unseen_max, m_unseen_min = M_UNSEEN_MAX, m_seen_max
@@ -29,6 +137,10 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0, mu_see
 
     df['domain'] = np.select(conditions, choices, default='other')
     df_filtered = df[df['domain'] == 'm_seen_mu_seen'].copy()
+
+    have_arm = False
+    if MULTI_ANGLE:
+        have_arm = _report_column_availability(df)
     
     acc_cols = sorted([c for c in df_filtered.columns if "input_acc_" in c], key=lambda x: int(x.split('_')[-1]))
     vel_cols = sorted([c for c in df_filtered.columns if "input_vel_" in c], key=lambda x: int(x.split('_')[-1]))
@@ -74,15 +186,93 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0, mu_see
     fx_robot_tensor = torch.tensor(np.array(robot_fx_list), dtype=torch.float32)
     start_t_tensor = torch.tensor(df_filtered['start_t'].values.astype(np.int64))
 
+    # =================================================================
+    # TRAIN / VAL SPLIT
+    #
+    # MULTI_ANGLE: the same (mass, mu) pair appears once per orientation /
+    # push-side cell (~20 rows). A random split would leak almost every
+    # validation pair into training, so validation error would measure
+    # memorization rather than generalization. Split by property group.
+    # =================================================================
     indices = np.arange(len(df_filtered))
-    train_idx, val_idx = train_test_split(indices, test_size=0.2, random_state=42)
+
+    if MULTI_ANGLE:
+        groups, group_src = _build_property_groups(df_filtered)
+
+        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+        train_idx, val_idx = next(gss.split(indices, groups=groups))
+
+        n_groups = len(np.unique(groups))
+        n_train_groups = len(np.unique(groups[train_idx]))
+        n_val_groups = len(np.unique(groups[val_idx]))
+
+        print(f"[MULTI_ANGLE] group split on '{group_src}'")
+        print(f"[MULTI_ANGLE]   {len(df_filtered)} rows / {n_groups} property groups "
+              f"= {len(df_filtered) / max(n_groups, 1):.1f} trajectories per group")
+        print(f"[MULTI_ANGLE]   train {len(train_idx)} rows / {n_train_groups} groups")
+        print(f"[MULTI_ANGLE]   val   {len(val_idx)} rows / {n_val_groups} groups")
+
+        overlap = np.intersect1d(groups[train_idx], groups[val_idx])
+        assert len(overlap) == 0, f"Group leakage: {len(overlap)} groups in both splits"
+    else:
+        train_idx, val_idx = train_test_split(indices, test_size=0.2, random_state=42)
+        print(f"[SINGLE_ANGLE] random split: train {len(train_idx)} / val {len(val_idx)}")
+
+    # =================================================================
+    # OPTIONAL ARM CONDITIONING FEATURES
+    #
+    # Standardization statistics come from the TRAIN split only, so no
+    # validation information leaks into the input scaling.
+    # =================================================================
+    arm_tensor = None
+    if MULTI_ANGLE and USE_ARM_STATE:
+        if not have_arm:
+            raise ValueError(
+                "USE_ARM_STATE=True but the arm columns are missing from the CSV. "
+                "Either re-collect with the arm_state observation group enabled, "
+                "or set USE_ARM_STATE=False in configs.py."
+            )
+
+        feature_cols = get_arm_feature_cols()
+        arm_raw = df_filtered[feature_cols].values.astype(np.float32)
+
+        arm_mean = arm_raw[train_idx].mean(axis=0, keepdims=True)
+        arm_std = arm_raw[train_idx].std(axis=0, keepdims=True) + 1e-8
+        arm_norm = (arm_raw - arm_mean) / arm_std
+        arm_tensor = torch.tensor(arm_norm)
+
+        # Flag near-constant features using a RELATIVE threshold. An absolute
+        # cutoff misses columns like arm_ee_rot6d_2 (std 3e-5 about a mean of
+        # -1.0, i.e. the gripper always points down) or arm_ee_pos_z (std 4e-4,
+        # EE height fixed during the push) -- these are constants in disguise
+        # and contribute only noise once standardized.
+        scale = np.maximum(np.abs(arm_raw[train_idx]).mean(axis=0), 1e-12)
+        rel_var = arm_std.flatten() / scale
+        near_const = [c for c, r in zip(feature_cols, rel_var) if r < 1e-3]
+        if near_const:
+            print(f"[ARM_STATE][WARNING] Near-constant features (relative std < 1e-3, "
+                  f"no usable signal): {near_const}")
+
+        print(f"[ARM_STATE] mode='{ARM_FEATURE_MODE}', feature tensor "
+              f"{tuple(arm_tensor.shape)} ({len(feature_cols)} features, "
+              f"standardized on train split)")
+        print(f"[ARM_STATE] features: {feature_cols}")
     
-    train_dataset = TensorDataset(X_acc_tensor[train_idx], X_vel_tensor[train_idx], y_tensor[train_idx],
-                                  fz_robot_tensor[train_idx], rhs_acc_tensor[train_idx], lhs_net_f_tensor[train_idx],
-                                  fz_normal_tensor[train_idx], start_t_tensor[train_idx], fx_robot_tensor[train_idx])
-    val_dataset = TensorDataset(X_acc_tensor[val_idx], X_vel_tensor[val_idx], y_tensor[val_idx],
-                                fz_robot_tensor[val_idx], rhs_acc_tensor[val_idx], lhs_net_f_tensor[val_idx],
-                                fz_normal_tensor[val_idx], start_t_tensor[val_idx], fx_robot_tensor[val_idx])
+    train_tensors = [X_acc_tensor[train_idx], X_vel_tensor[train_idx], y_tensor[train_idx],
+                     fz_robot_tensor[train_idx], rhs_acc_tensor[train_idx], lhs_net_f_tensor[train_idx],
+                     fz_normal_tensor[train_idx], start_t_tensor[train_idx], fx_robot_tensor[train_idx]]
+    val_tensors = [X_acc_tensor[val_idx], X_vel_tensor[val_idx], y_tensor[val_idx],
+                   fz_robot_tensor[val_idx], rhs_acc_tensor[val_idx], lhs_net_f_tensor[val_idx],
+                   fz_normal_tensor[val_idx], start_t_tensor[val_idx], fx_robot_tensor[val_idx]]
+
+    if arm_tensor is not None:
+        # NOTE: this makes each batch a 10-tuple. Every unpack site must be
+        # updated -- see PATCH_evaluate_and_train.md for the five locations.
+        train_tensors.append(arm_tensor[train_idx])
+        val_tensors.append(arm_tensor[val_idx])
+
+    train_dataset = TensorDataset(*train_tensors)
+    val_dataset = TensorDataset(*val_tensors)
 
     g = torch.Generator()
     g.manual_seed(42)

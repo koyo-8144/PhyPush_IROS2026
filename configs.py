@@ -27,11 +27,72 @@ REAL_FRIC_RANGE = (1.856 * 0.4626 * G) - (0.175 * 0.1580 * G)
 # FRAME_MODE = "world"
 FRAME_MODE = "local"
 
+# =============================================================================
+# MULTI_ANGLE
+#
+# True  -> dataset from run_collect_sweep.sh: each (mass, mu) pair observed from
+#          10 object yaws x 2 push sides (COLLECT_IDX 0..19) across several
+#          RANDOM_SEED values. Requires the extra CSV columns:
+#          obj_yaw_base, push_face_index, collect_idx, seed, env_id,
+#          plus the 29 arm columns (see ARM_*_COLS in dataset.py).
+# False -> original single-orientation dataset.
+#
+# When True, dataset.py switches to a GROUP split keyed on the property pair.
+# A plain random split would place the same (mass, mu) pair in both train and
+# val (it appears ~20 times), making validation error meaningless.
+# =============================================================================
+MULTI_ANGLE = True
+
+# =============================================================================
+# USE_ARM_STATE
+#
+# Feed the recorded arm configuration to the model as conditioning features,
+# testing whether estimation error depends on the robot's pose rather than on
+# the object. Default False.
+#
+# WARNING: setting this True adds a 10th tensor to every batch. Five unpack
+# sites must be updated first (train.py 229/469, optuna_optimize.py 133/264,
+# inspect_dataset.py inspect_dataloader). See PATCH_evaluate_and_train.md.
+#
+# Run the correlation analysis in evaluate.py before enabling this -- if
+# worst_manipulability shows no relationship with error, the extra 28 input
+# dimensions will not help.
+# =============================================================================
+USE_ARM_STATE = False
+
+# Which of the newly recorded quantities to condition on.
+#
+#   "push_dir"       -> push_dir_b_x, push_dir_b_y   (cond_dim = 2)
+#                       The push heading as a unit vector in the ROBOT BASE
+#                       frame. One concept, two components. This is the most
+#                       complete single descriptor of "which way is the arm
+#                       reaching", and it is the quantity that varies by
+#                       construction across the sweep. RECOMMENDED START.
+#
+#   "manipulability" -> worst_manipulability         (cond_dim = 1)
+#                       Strictly one scalar: min sqrt(det(J J^T)) over the push.
+#                       Use if you want the smallest possible change.
+#
+#   "minimal"        -> the above three together     (cond_dim = 3)
+#   "full"           -> all 28 arm features          (cond_dim = 28)
+#
+# NOT offered as an option: obj_yaw_base. In this dataset the push direction is
+# locked to the object yaw by the synchronization in process_actions, so the two
+# carry identical information here -- but they come apart at RL deployment,
+# where the policy picks the push angle freely. Conditioning on the base-frame
+# push direction generalizes to that setting; conditioning on object yaw does
+# not, because it is the arm configuration that actually differs.
+ARM_FEATURE_MODE = "push_dir"
+
+
 if FRAME_MODE == "world":
     CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_tb-3_ta57_emavel1.0_velstd0.0_broad.csv" # force
 elif FRAME_MODE == "local":
-    # CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_trans_cube.csv" # force_v2, force_v3
-    CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper.csv" # force_v4
+    if MULTI_ANGLE:
+        CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper_multi_angle.csv"
+    else:
+        # CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_trans_cube.csv" # force_v2, force_v3
+        CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper.csv" # force_v4
 
 
 config_data = {
@@ -79,6 +140,9 @@ config_data = {
     'vel_filter_threshold': 0.01,
     'transformer_ver': 5,
     'frame_mode': FRAME_MODE,
+    'multi_angle': MULTI_ANGLE,
+    'use_arm_state': USE_ARM_STATE,
+    'arm_feature_mode': ARM_FEATURE_MODE,
 }
 
 
@@ -127,6 +191,9 @@ config_force = {
     'vel_filter_threshold': 0.01,
     'transformer_ver': 5,
     'frame_mode': FRAME_MODE,
+    'multi_angle': MULTI_ANGLE,
+    'use_arm_state': USE_ARM_STATE,
+    'arm_feature_mode': ARM_FEATURE_MODE,
 }
 
 
@@ -175,6 +242,9 @@ config_force_v2 = {
     'vel_filter_threshold': 0.01,
     'transformer_ver': 5,
     'frame_mode': FRAME_MODE,
+    'multi_angle': MULTI_ANGLE,
+    'use_arm_state': USE_ARM_STATE,
+    'arm_feature_mode': ARM_FEATURE_MODE,
 }
 
 
@@ -197,9 +267,6 @@ config_force_v3 = {
     'last_layer_mus': 1.3244787508344682,
     'dropout': 0.03707939352522528,
     'sharpness': 1.0,
-    'cross_sharpness': 7.43379868747758,
-    'm_sharpness': 9.20706918441079,
-    'mu_sharpness': 1.0318866842435197,
     'cross_sharpness': 9.628721199478191,
     'm_sharpness': 9.994619264743257,
     'mu_sharpness': 7.8646360451996005,
@@ -226,6 +293,9 @@ config_force_v3 = {
     'vel_filter_threshold': 0.01,
     'transformer_ver': 5,
     'frame_mode': FRAME_MODE,
+    'multi_angle': MULTI_ANGLE,
+    'use_arm_state': USE_ARM_STATE,
+    'arm_feature_mode': ARM_FEATURE_MODE,
 }
 
 
@@ -274,6 +344,9 @@ config_force_v4 = {
     'vel_filter_threshold': 0.01,
     'transformer_ver': 5,
     'frame_mode': FRAME_MODE,
+    'multi_angle': MULTI_ANGLE,
+    'use_arm_state': USE_ARM_STATE,
+    'arm_feature_mode': ARM_FEATURE_MODE,
 }
 
 
