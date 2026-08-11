@@ -391,13 +391,13 @@ def inspect_samples(df, num_samples=3):
         axes[4].legend(loc='upper left')
 
         analyze_friction(fric_magnitude_calc, fric_magnitude_sim, fz_normal_sim, gt_mu, i)
-        print()
         
         for ax in axes:
             ax.grid(True, linestyle=':', alpha=0.6)
             
         fig.tight_layout()
         plt.show()
+
 
 def inspect_velocity_vs_yaw(df):
     """
@@ -455,7 +455,6 @@ def inspect_velocity_vs_yaw(df):
             ax.set_ylabel("Extracted EE Velocity [m/s]")
         ax.grid(True, linestyle=':', alpha=0.6)
         
-    # Add a single colorbar for both subplots
     cbar = fig.colorbar(sm, ax=axes, orientation='vertical', fraction=0.02, pad=0.04)
     cbar.set_label('Object Yaw Base (rad)')
     
@@ -463,16 +462,43 @@ def inspect_velocity_vs_yaw(df):
     
     plt.show()
 
+
 def main():
     if not os.path.exists(CSV_PATH):
         print(f"Error: File not found at {CSV_PATH}")
         return
 
-    df = pd.read_csv(CSV_PATH)
-    if 'gt_fric_force' in df.columns:
-        df['gt_fric_force'] = df['gt_fric_force'].apply(clean_force_col)
+    print(f"Loading data in chunks to prevent memory crash...")
+    
+    chunk_list = []
+    
+    try:
+        # Read in chunks of 15,000 rows
+        for chunk in pd.read_csv(CSV_PATH, chunksize=15000):
+            
+            # If the dataset is Multi-Angle, keep only the first 50 environments (out of 512)
+            # This perfectly preserves the 20-angle sweeps while dropping ~90% of the massive file
+            if MULTI_ANGLE and 'env_id' in chunk.columns:
+                chunk = chunk[chunk['env_id'] < 50]
+            else:
+                # Fallback for Single-Angle dataset: just grab a random 10% slice
+                chunk = chunk.sample(frac=0.1, random_state=42)
+            
+            # Downcast to 32-bit floats to halve the remaining memory footprint
+            float_cols = chunk.select_dtypes(include=['float64']).columns
+            chunk[float_cols] = chunk[float_cols].astype(np.float32)
+            
+            if 'gt_fric_force' in chunk.columns:
+                chunk['gt_fric_force'] = chunk['gt_fric_force'].apply(clean_force_col)
+                
+            chunk_list.append(chunk)
+            
+        df = pd.concat(chunk_list, ignore_index=True)
+        print(f"Successfully loaded a representative subset! Rows: {df.shape[0]}, Columns: {df.shape[1]}")
         
-    print(f"Successfully loaded data! Rows: {df.shape[0]}, Columns: {df.shape[1]}")
+    except MemoryError:
+        print("\n[FATAL] Still ran out of memory! Your system RAM is too small even for chunking.")
+        return
 
     # =======================================================
     # DATASET MACRO SUMMARY & DISTRIBUTIONS
@@ -481,7 +507,7 @@ def main():
     print(f"DATASET MACRO SUMMARY ({FRAME_MODE.upper()} FRAME, "
           f"MULTI_ANGLE={MULTI_ANGLE}, USE_ARM_STATE={USE_ARM_STATE})")
     print("="*50)
-    print(f"Total Sequences (Rows): {len(df)}")
+    print(f"Representative Subset (Rows): {len(df)}")
     
     if 'gt_mass' in df.columns and 'gt_mu' in df.columns:
         print("\n[Ground Truth Statistics]")
@@ -493,12 +519,12 @@ def main():
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
         
         sns.histplot(data=df, x='gt_mass', kde=True, color='#9467bd', ax=axes[0])
-        axes[0].set_title(f"Ground Truth Mass Distribution (N={len(df)})")
+        axes[0].set_title(f"Ground Truth Mass Distribution (Subset N={len(df)})")
         axes[0].set_xlabel("Mass [kg]")
         axes[0].set_ylabel("Count")
         
         sns.histplot(data=df, x='gt_mu', kde=True, color='#ff7f0e', ax=axes[1])
-        axes[1].set_title(f"Ground Truth Friction Distribution (N={len(df)})")
+        axes[1].set_title(f"Ground Truth Friction Distribution (Subset N={len(df)})")
         axes[1].set_xlabel("Friction Coefficient (\u03bc)")
         axes[1].set_ylabel("Count")
         

@@ -16,9 +16,35 @@ FILE_2 = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper_m
 # Sequence length for time-series extraction
 SEQ_LEN = 60
 
-print("Loading datasets...")
-df1 = pd.read_csv(FILE_1)
-df2 = pd.read_csv(FILE_2)
+def load_memory_safe(file_path):
+    """
+    Loads all rows but aggressively drops heavy, unused physics columns 
+    to prevent memory crashes on 10GB+ CSV files.
+    """
+    # 1. Read just the header to memorize all columns for the Column Comparison step
+    all_cols = pd.read_csv(file_path, nrows=0).columns.tolist()
+    
+    # 2. Keep only metadata, ground truth, and velocity. 
+    # Drop the massive 'pinn_' and 'input_acc_' arrays which are unused in this script.
+    keep_cols = [c for c in all_cols if not (c.startswith('pinn_') or c.startswith('input_acc_'))]
+    
+    # 3. Load in chunks and downcast floats to 32-bit to save 50% more RAM
+    chunk_list = []
+    for chunk in pd.read_csv(file_path, usecols=keep_cols, chunksize=15000):
+        float_cols = chunk.select_dtypes(include=['float64']).columns
+        chunk[float_cols] = chunk[float_cols].astype(np.float32)
+        chunk_list.append(chunk)
+        
+    df = pd.concat(chunk_list, ignore_index=True)
+    
+    # Safely attach the original column list to the DataFrame for later reference
+    df.attrs['original_columns'] = set(all_cols)
+    return df
+
+
+print("Loading datasets in memory-safe chunks (ignoring heavy physics arrays)...")
+df1 = load_memory_safe(FILE_1)
+df2 = load_memory_safe(FILE_2)
 
 # Assign labels for comparison
 df1['dataset_source'] = 'Single-Angle Dataset'
@@ -77,7 +103,10 @@ def print_summary(df, name):
     print(f"DATASET SUMMARY: {name}")
     print(f"{'='*50}")
     print(f"Total Trajectories (Rows): {len(df)}")
-    print(f"Total Features (Columns):  {df.shape[1]}")
+    
+    # Recover original total column count
+    original_col_count = len(df.attrs.get('original_columns', df.columns))
+    print(f"Total Features (Columns):  {original_col_count}")
     
     print("\n[Missing Values]")
     missing = df.isnull().sum()
@@ -108,9 +137,9 @@ def print_summary(df, name):
 print_summary(df1, "Dataset 1 (Single-Angle)")
 print_summary(df2, "Dataset 2 (Multi-Angle)")
 
-# Compare Columns
-cols1 = set(df1.columns)
-cols2 = set(df2.columns)
+# Compare Columns (Using the safely preserved full column lists)
+cols1 = df1.attrs.get('original_columns', set(df1.columns))
+cols2 = df2.attrs.get('original_columns', set(df2.columns))
 common_cols = cols1.intersection(cols2)
 only_in_1 = cols1 - cols2
 only_in_2 = cols2 - cols1
@@ -264,6 +293,7 @@ def compare_aligned_trajectories(df1, df2, df_combined, vel_cols, num_samples=5)
         ax.set_ylabel("Input Velocity")
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
+        
 
     axes[-1].set_xlabel("Time Step")
     plt.tight_layout()
