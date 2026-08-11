@@ -13,7 +13,7 @@ from models import PhysicsTransformerEstimator
 from dataset import create_dataloaders
 from utils import set_seed, clean_force_col
 from configs import M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN, M_UNSEEN_MAX, MU_UNSEEN_MAX, GLOBAL_M_RANGE, GLOBAL_MU_RANGE, GLOBAL_FRIC_RANGE, REAL_M_RANGE, REAL_MU_RANGE, REAL_FRIC_RANGE, INCLUDE_UNSEEN, CSV_PATH, G, MULTI_ANGLE
-from dataset import load_dataset_csv
+from dataset import load_dataset_csv, ARM_DIM
 
 # ==========================================
 # 1. CONFIGURATION & PATHS
@@ -226,7 +226,7 @@ def main():
 
     # Extract the configuration flag to handle dynamic conditioning
     use_arm_state = config.get('use_arm_state', False)
-    cond_dimension = 2 if use_arm_state else 0
+    cond_dimension = ARM_DIM if use_arm_state else 0
 
     # =================================================================
     # REPLICATE ARM STATE STANDARDIZATION FROM TRAINING (IF ENABLED)
@@ -310,9 +310,16 @@ def main():
         X_vel = torch.tensor(df_domain[vel_cols].values.reshape(-1, seq_len, 1)).float().to(device)
         y_gt = torch.tensor(df_domain[['gt_mass', 'gt_mu']].values).float().to(device)
         
-        # Conditionally handle the conditioning tensor
+        # Conditionally handle the conditioning tensor.
+        # Use the SAME feature columns and standardization stats the model was
+        # trained on (saved by dataset.py). Feeding raw push_dir values here
+        # would silently misscale the conditioning input.
         if use_arm_state:
-            b_cond = torch.tensor(df_domain[['cond_x', 'cond_y']].values).float().to(device)
+            from dataset import get_arm_feature_cols, load_arm_stats
+            feat_cols, arm_mean, arm_std = load_arm_stats()
+            raw = df_domain[feat_cols].values.astype(np.float32)
+            norm = (raw - arm_mean) / arm_std
+            b_cond = torch.tensor(norm).float().to(device)
         else:
             b_cond = None
 
@@ -355,6 +362,9 @@ def main():
     real_eval_csv_path = os.path.join(EVAL_CHECKPOINT_DIR, "real_evaluation_summary.csv")
     real_detailed_csv_path = os.path.join(EVAL_CHECKPOINT_DIR, "real_detailed_inference.csv")
 
+    from dataset import ARM_DIM
+    _warned_real_cond = [False]   # warn-once guard for real-data conditioning
+
     all_runs = []
     if os.path.exists(OFFLINE_DATA_DIR):
         condition_folders = [f.path for f in os.scandir(OFFLINE_DATA_DIR) if f.is_dir()]
@@ -389,9 +399,22 @@ def main():
                     vel_data = df_inf['v_y_smoothed'].values
                     X_vel_real = torch.tensor(vel_data).unsqueeze(0).unsqueeze(-1).float().to(device)
                     
-                    # Provide an "average" normalized arm posture (zeros) if conditioning is active
+                    # The real captures have no push_dir_b columns -- the heading
+                    # is a sim-frame quantity not recorded on hardware. Feeding
+                    # zeros would be the standardized MEAN heading, i.e. a fixed
+                    # fictitious posture, which biases every real prediction the
+                    # same way. Use the training-set mean explicitly and warn, so
+                    # the limitation is visible rather than hidden behind zeros.
                     if use_arm_state:
-                        b_cond_real = torch.zeros((1, 2)).float().to(device)
+                        # Standardized mean is 0 by construction; pass it, but flag
+                        # that real-data conditioning is not physically grounded.
+                        if not _warned_real_cond[0]:
+                            print("[ARM_STATE][WARNING] Real captures lack push_dir_b; "
+                                  "conditioning uses the training mean posture for all "
+                                  "real runs. Real-data numbers are not conditioned in "
+                                  "any meaningful sense.")
+                            _warned_real_cond[0] = True
+                        b_cond_real = torch.zeros((1, ARM_DIM)).float().to(device)
                     else:
                         b_cond_real = None
 

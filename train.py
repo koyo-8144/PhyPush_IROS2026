@@ -15,7 +15,8 @@ from models import PhysicsTransformerEstimator
 from losses import log_mse_loss, PinnLossCalculator
 from dataset import create_dataloaders
 from configs import used_config, CSV_PATH
-from dataset import load_dataset_csv
+from dataset import load_dataset_csv, ARM_DIM
+
 
 def main():
     set_seed(42)
@@ -138,8 +139,7 @@ def main():
     # ==========================================
     # 3. MODEL SETUP & INIT
     # ==========================================
-    # Determine conditioning dimension based on the config flag
-    cond_dimension = 2 if use_arm_state else 0
+    cond_dimension = ARM_DIM if use_arm_state else 0
 
     model = PhysicsTransformerEstimator(
         input_dim=1,          

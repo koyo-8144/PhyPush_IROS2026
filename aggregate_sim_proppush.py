@@ -2,7 +2,6 @@ import pandas as pd
 import os
 import numpy as np
 from configs import INCLUDE_UNSEEN
-from dataset import load_dataset_csv
 
 # ==========================================
 # 1. CONFIGURATION & PATHS
@@ -114,7 +113,7 @@ def load_data(models_dict, key_is_dict=True):
             print(f"Warning: File not found: {csv_path}")
             continue
         try:
-            df = load_dataset_csv()
+            df = pd.read_csv(csv_path)
             df['Model'] = model_name
             combined_df = pd.concat([combined_df, df], ignore_index=True)
             print(f"Loaded {model_name}")

@@ -12,9 +12,8 @@ from optuna.pruners import MedianPruner
 from utils import set_seed, clean_force_col, build_model_string
 from models import PhysicsTransformerEstimator
 from losses import log_mse_loss, PinnLossCalculator
-from dataset import create_dataloaders
-from configs import used_config, CSV_PATH
-from dataset import load_dataset_csv
+from dataset import create_dataloaders, load_dataset_csv, ARM_DIM
+from configs import used_config, CSV_PATH, USE_ARM_STATE
 
 def objective(trial):
     set_seed(42)
@@ -83,6 +82,7 @@ def objective(trial):
         version=config['transformer_ver'],
         max_mass_scale=config['last_layer_ms'],
         max_mu_scale=config['last_layer_mus'],
+        cond_dim=ARM_DIM if USE_ARM_STATE else 0,
     ).to(device)
 
     if config['lr_optimizer'] == "Adam":
@@ -131,7 +131,11 @@ def objective(trial):
 
         model.train()
         
-        for b_acc, b_vel, b_y, b_robot_fz, b_rhs_acc, b_lhs_net_f, b_table_fz, b_start_t, b_robot_fx in train_loader:
+        for batch in train_loader:
+            b_acc, b_vel, b_y = batch[0], batch[1], batch[2]
+            b_robot_fz, b_rhs_acc, b_lhs_net_f = batch[3], batch[4], batch[5]
+            b_table_fz, b_start_t, b_robot_fx = batch[6], batch[7], batch[8]
+            b_cond = batch[9].to(device) if USE_ARM_STATE else None
             b_acc, b_vel, b_y = b_acc.to(device), b_vel.to(device), b_y.to(device)
             b_robot_fz, b_rhs_acc, b_lhs_net_f, b_table_fz = b_robot_fz.to(device), b_rhs_acc.to(device), b_lhs_net_f.to(device), b_table_fz.to(device)
             b_robot_fx = b_robot_fx.to(device)
@@ -141,7 +145,7 @@ def objective(trial):
 
             optimizer.zero_grad()
             
-            output, (c_weights, m_weights, f_weights), (net_f_est, fric_f_est) = model(b_vel)
+            output, (c_weights, m_weights, f_weights), (net_f_est, fric_f_est) = model(b_vel, cond=b_cond)
 
             m_gt = b_y[:, 0].unsqueeze(1)
             mu_gt = b_y[:, 1].unsqueeze(1)
@@ -262,7 +266,11 @@ def objective(trial):
         val_running_loss = 0.0
         
         with torch.no_grad():
-            for b_acc, b_vel, b_y, b_robot_fz, b_rhs_acc, b_lhs_net_f, b_table_fz, b_start_t, b_robot_fx in val_loader:
+            for batch in val_loader:
+                b_acc, b_vel, b_y = batch[0], batch[1], batch[2]
+                b_robot_fz, b_rhs_acc, b_lhs_net_f = batch[3], batch[4], batch[5]
+                b_table_fz, b_start_t, b_robot_fx = batch[6], batch[7], batch[8]
+                b_cond = batch[9].to(device) if USE_ARM_STATE else None
                 b_acc, b_vel, b_y = b_acc.to(device), b_vel.to(device), b_y.to(device)
                 b_robot_fz, b_rhs_acc, b_lhs_net_f, b_table_fz = b_robot_fz.to(device), b_rhs_acc.to(device), b_lhs_net_f.to(device), b_table_fz.to(device)
                 b_robot_fx = b_robot_fx.to(device)
@@ -270,7 +278,7 @@ def objective(trial):
                 if frame_mode == "local":
                     b_robot_fz = -b_robot_fz
 
-                output, _, (net_f_est_val, fric_f_est_val) = model(b_vel) 
+                output, _, (net_f_est_val, fric_f_est_val) = model(b_vel, cond=b_cond) 
                 
                 m_gt_val = b_y[:, 0].unsqueeze(1)
                 mu_gt_val = b_y[:, 1].unsqueeze(1)

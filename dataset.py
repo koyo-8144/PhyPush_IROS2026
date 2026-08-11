@@ -168,6 +168,46 @@ def load_dataset_csv(csv_path=None, chunksize=50000, verbose=True):
     return df
 
 
+# Sidecar file holding the arm-feature standardization stats, so evaluation can
+# apply the SAME mean/std the model was trained on. Without this, evaluate.py
+# would feed raw push_dir values into a model trained on standardized ones.
+ARM_STATS_SUFFIX = ".arm_stats.npz"
+
+
+def arm_stats_path(csv_path=None):
+    from configs import CSV_PATH as _CSV
+    base = csv_path if csv_path is not None else _CSV
+    return base + ARM_STATS_SUFFIX
+
+
+def save_arm_stats(feature_cols, mean, std, csv_path=None):
+    """Persist arm-feature standardization stats next to the dataset CSV."""
+    path = arm_stats_path(csv_path)
+    np.savez(path,
+             feature_cols=np.array(feature_cols, dtype=object),
+             mean=mean.astype(np.float32),
+             std=std.astype(np.float32))
+    print(f"[ARM_STATE] saved standardization stats -> {path}")
+
+
+def load_arm_stats(csv_path=None):
+    """Load arm-feature stats saved during training. Returns (cols, mean, std).
+
+    Raises FileNotFoundError if training never wrote them -- evaluation must not
+    silently fall back to raw or re-derived stats, which would misscale the
+    conditioning input.
+    """
+    path = arm_stats_path(csv_path)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Arm stats not found at {path}. Run train.py once with "
+            f"USE_ARM_STATE=True to generate them before evaluating a "
+            f"conditioned model."
+        )
+    d = np.load(path, allow_pickle=True)
+    return list(d['feature_cols']), d['mean'], d['std']
+
+
 def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0, mu_seen_min=0.15, mu_seen_max=0.5):
     m_unseen_max, m_unseen_min = M_UNSEEN_MAX, m_seen_max
     mu_unseen_max, mu_unseen_min = MU_UNSEEN_MAX, mu_seen_max
@@ -279,20 +319,29 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0, mu_see
     # =================================================================
     arm_tensor = None
     if MULTI_ANGLE and USE_ARM_STATE:
-        if not have_arm:
+        # Gate on the columns the SELECTED mode actually needs, not on all 29
+        # arm columns. ARM_FEATURE_MODE='push_dir' needs only push_dir_b_{x,y};
+        # requiring the 24 joint columns too would reject a valid dataset.
+        feature_cols = get_arm_feature_cols()
+        missing_feats = [c for c in feature_cols if c not in df_filtered.columns]
+        if missing_feats:
             raise ValueError(
-                "USE_ARM_STATE=True but the arm columns are missing from the CSV. "
-                "Either re-collect with the arm_state observation group enabled, "
-                "or set USE_ARM_STATE=False in configs.py."
+                f"USE_ARM_STATE=True with ARM_FEATURE_MODE='{ARM_FEATURE_MODE}' "
+                f"needs columns {feature_cols}, but the CSV is missing "
+                f"{missing_feats}. Re-collect with the arm_state observation "
+                f"group enabled, choose a mode whose columns exist, or set "
+                f"USE_ARM_STATE=False in configs.py."
             )
 
-        feature_cols = get_arm_feature_cols()
         arm_raw = df_filtered[feature_cols].values.astype(np.float32)
 
         arm_mean = arm_raw[train_idx].mean(axis=0, keepdims=True)
         arm_std = arm_raw[train_idx].std(axis=0, keepdims=True) + 1e-8
         arm_norm = (arm_raw - arm_mean) / arm_std
         arm_tensor = torch.tensor(arm_norm)
+
+        # Persist so evaluate.py can reproduce this exact scaling.
+        save_arm_stats(feature_cols, arm_mean, arm_std)
 
         # Flag near-constant features using a RELATIVE threshold. An absolute
         # cutoff misses columns like arm_ee_rot6d_2 (std 3e-5 about a mean of

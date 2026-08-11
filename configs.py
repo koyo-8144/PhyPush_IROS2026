@@ -82,7 +82,8 @@ USE_ARM_STATE = True
 # where the policy picks the push angle freely. Conditioning on the base-frame
 # push direction generalizes to that setting; conditioning on object yaw does
 # not, because it is the arm configuration that actually differs.
-ARM_FEATURE_MODE = "push_dir"
+# ARM_FEATURE_MODE = "push_dir"
+ARM_FEATURE_MODE = "minimal"
 
 
 if FRAME_MODE == "world":

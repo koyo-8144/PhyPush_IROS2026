@@ -150,6 +150,45 @@ def report_arm_columns(df):
         plt.show()
 
 
+def plot_kinematic_distributions(df):
+    """
+    Plots histograms for object yaw and push directions to verify continuous distributions.
+    """
+    cols_to_plot = ['obj_yaw_base', 'push_dir_b_x', 'push_dir_b_y']
+    available_cols = [c for c in cols_to_plot if c in df.columns]
+    
+    if not available_cols:
+        return
+        
+    print("\nPlotting Kinematic Distributions (Yaw & Push Directions)...")
+    sns.set_theme(style="whitegrid")
+    fig, axes = plt.subplots(1, len(available_cols), figsize=(5 * len(available_cols), 5))
+    
+    if len(available_cols) == 1:
+        axes = [axes]
+        
+    for ax, col in zip(axes, available_cols):
+        valid_data = df[col].dropna()
+        
+        if col == 'obj_yaw_base':
+            # Convert to degrees for better interpretability
+            data = np.degrees(valid_data)
+            xlabel = "Object Yaw [deg]"
+            color = "#2ca02c"
+        else:
+            data = valid_data
+            xlabel = col
+            color = "#1f77b4"
+            
+        sns.histplot(data, kde=True, color=color, ax=ax, bins=50)
+        ax.set_title(f"Distribution of {col}")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Count")
+        
+    plt.tight_layout()
+    plt.show()
+
+
 # =============================================================================
 # PER-PLOT NUMERIC ANALYSIS
 # =============================================================================
@@ -391,6 +430,7 @@ def inspect_samples(df, num_samples=3):
         axes[4].legend(loc='upper left')
 
         analyze_friction(fric_magnitude_calc, fric_magnitude_sim, fz_normal_sim, gt_mu, i)
+        print()
         
         for ax in axes:
             ax.grid(True, linestyle=':', alpha=0.6)
@@ -537,6 +577,7 @@ def main():
     if MULTI_ANGLE:
         report_multi_angle_coverage(df)
         report_arm_columns(df)
+        plot_kinematic_distributions(df)
     
     # We only need the DataFrame filtered by domain for this script
     _, _, seq_len, df_filtered, _ = create_dataloaders(
