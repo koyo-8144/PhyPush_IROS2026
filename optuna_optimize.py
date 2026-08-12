@@ -14,6 +14,8 @@ from models import PhysicsTransformerEstimator
 from losses import log_mse_loss, PinnLossCalculator
 from dataset import create_dataloaders, load_dataset_csv, ARM_DIM
 from configs import used_config, CSV_PATH, USE_ARM_STATE
+import time
+from torch.utils.data import DataLoader
 
 def objective(trial):
     set_seed(42)
@@ -25,7 +27,7 @@ def objective(trial):
     config = copy.deepcopy(used_config)
     
     # Override fixed variables
-    config['num_epochs'] = 500
+    config['num_epochs'] = 700
     
     # Suggest variables to optimize
     config['init_lr'] = trial.suggest_float('init_lr', 1e-5, 5e-3, log=True)
@@ -50,20 +52,27 @@ def objective(trial):
     #     config['pinn_coeffs'].update({'p4': 1.0, 'p4_1': 10.0, 'p4_2': 10.0, 'p4_3': 1.0})
 
     # ==========================================
-    # 2. DATA PREPARATION
+    # 2. DATA PREPARATION  (reuse preloaded datasets -- NO reload per trial)
     # ==========================================
-    df = load_dataset_csv()
-    if 'gt_fric_force' in df.columns:
-        df['gt_fric_force'] = df['gt_fric_force'].apply(clean_force_col)
-
-    train_loader, val_loader, seq_len, _, _ = create_dataloaders(
-        df, 
-        config['batch_size'], 
-        config['m_seen_min'], config['m_seen_max'],
-        config['mu_seen_min'], config['mu_seen_max']
-    )
+    # The 13 GB CSV and the physics extraction are done ONCE in main() and
+    # cached in objective.PRELOADED. Here we only wrap the cached TensorDatasets
+    # in fresh DataLoaders at this trial's batch size -- milliseconds, not
+    # minutes. Reloading per trial was the stall.
+    pre = objective.PRELOADED
+    seq_len = pre['seq_len']
     config['seq_len'] = seq_len
     frame_mode = config['frame_mode']
+
+    g = torch.Generator(); g.manual_seed(42)
+    train_loader = DataLoader(pre['train_dataset'], batch_size=config['batch_size'],
+                              shuffle=True, generator=g)
+    val_loader = DataLoader(pre['val_dataset'], batch_size=config['batch_size'],
+                            shuffle=False)
+
+    print(f"  [trial {trial.number}] batch={config['batch_size']} "
+          f"lr={config['init_lr']:.2e} num_enc={config['num_enc']} "
+          f"dropout={config['dropout']:.3f} "
+          f"| {len(train_loader)} train batches, {len(val_loader)} val", flush=True)
 
     # ==========================================
     # 3. MODEL, OPTIMIZER, LOSS SETUP
@@ -120,8 +129,10 @@ def objective(trial):
     # ==========================================
     # 4. TRAINING LOOP
     # ==========================================
+    trial_start = time.time()
     for epoch in range(config['num_epochs']):
-        
+        epoch_start = time.time()
+
         current_pinn_coeff = 1.0
         if config['pinn_coeff_annealing'] == 1:
             if epoch < config['annealing_start_epoch']:
@@ -130,7 +141,8 @@ def objective(trial):
                 current_pinn_coeff = min(1.0, (epoch - config['annealing_start_epoch']) / config['ramp_duration'])
 
         model.train()
-        
+        running_loss = 0.0
+
         for batch in train_loader:
             b_acc, b_vel, b_y = batch[0], batch[1], batch[2]
             b_robot_fz, b_rhs_acc, b_lhs_net_f = batch[3], batch[4], batch[5]
@@ -259,6 +271,8 @@ def objective(trial):
             optimizer.step()
             scheduler.step()
 
+            running_loss += total_loss.item() * b_acc.size(0)
+
         # ==========================================
         # 5. VALIDATION LOOP
         # ==========================================
@@ -371,26 +385,89 @@ def objective(trial):
                 val_running_loss += batch_loss.item() * b_acc.size(0)
         
         epoch_val_loss = val_running_loss / len(val_loader.dataset)
+        epoch_train_loss = running_loss / len(train_loader.dataset)
 
         # Optuna Pruning step
         trial.report(epoch_val_loss, epoch)
+
+        dt = time.time() - epoch_start
+        improved = epoch_val_loss < best_val_loss
+        if epoch % 100 == 0 or epoch < 3 or improved:
+            print(f"    [t{trial.number} e{epoch:3d}] "
+                  f"train {epoch_train_loss:.5f} val {epoch_val_loss:.5f} "
+                  f"best {min(best_val_loss, epoch_val_loss):.5f} "
+                  f"{'*' if improved else ' '} "
+                  f"{dt:5.1f}s/epoch", flush=True)
+
         if trial.should_prune():
+            print(f"    [t{trial.number} e{epoch}] PRUNED "
+                  f"(val {epoch_val_loss:.5f} above median)", flush=True)
             raise optuna.exceptions.TrialPruned()
 
-        if epoch_val_loss < best_val_loss:
+        if improved:
             best_val_loss = epoch_val_loss
-            
+
+    print(f"  [trial {trial.number}] done: best val {best_val_loss:.5f} "
+          f"in {time.time() - trial_start:.0f}s", flush=True)
     return best_val_loss
 
+def _progress_callback(study, trial):
+    """Print a study-level summary after each finished trial."""
+    try:
+        best = study.best_value
+    except Exception:
+        best = float('nan')
+    n_done = len([t for t in study.trials if t.state.name == "COMPLETE"])
+    n_pruned = len([t for t in study.trials if t.state.name == "PRUNED"])
+    print(f"[STUDY] trial {trial.number} {trial.state.name} "
+          f"value={trial.value if trial.value is not None else float('nan'):.5f} "
+          f"| best={best:.5f} | complete={n_done} pruned={n_pruned}",
+          flush=True)
+
+
+def _preload_data():
+    """Load the CSV and build the TensorDatasets ONCE.
+
+    Returns a dict with the datasets and seq_len. Every trial reuses these and
+    only rebuilds cheap DataLoaders at its own batch size. This is the single
+    biggest speedup: the 13 GB read + physics extraction happens once instead
+    of 1000 times.
+    """
+    print("[PRELOAD] loading dataset once for all trials ...", flush=True)
+    t0 = time.time()
+    df = load_dataset_csv()
+    if 'gt_fric_force' in df.columns:
+        df['gt_fric_force'] = df['gt_fric_force'].apply(clean_force_col)
+
+    # Batch size here is irrelevant -- we only keep the datasets, not the loader.
+    train_loader, val_loader, seq_len, _, _ = create_dataloaders(
+        df, used_config['batch_size'],
+        used_config['m_seen_min'], used_config['m_seen_max'],
+        used_config['mu_seen_min'], used_config['mu_seen_max']
+    )
+    pre = {
+        'train_dataset': train_loader.dataset,
+        'val_dataset': val_loader.dataset,
+        'seq_len': seq_len,
+    }
+    print(f"[PRELOAD] done in {time.time() - t0:.0f}s "
+          f"| train {len(pre['train_dataset'])} / val {len(pre['val_dataset'])} "
+          f"samples, seq_len {seq_len}", flush=True)
+    return pre
+
+
 if __name__ == "__main__":
-    print("Starting Hyperparameter Optimization with Optuna...")
-    
+    print("Starting Hyperparameter Optimization with Optuna...", flush=True)
+
     # 1. Ensure the output directory exists
     os.makedirs("./results/optuna", exist_ok=True)
+
+    # 1b. Preload data ONCE and attach to objective (see DATA PREPARATION above).
+    objective.PRELOADED = _preload_data()
     
     # 2. Define a persistent SQLite database path and a name for this study
     storage_name = "sqlite:///results/optuna/phypush_tuning.db"
-    study_name = "phypush_hyperparam_search_v3"
+    study_name = "phypush_multiangle_hyperparam_search"
     
     # 3. Create or load the study using the storage
     study = optuna.create_study(
@@ -402,7 +479,7 @@ if __name__ == "__main__":
     )
     
     # Run 1000 trials
-    study.optimize(objective, n_trials=1000)
+    study.optimize(objective, n_trials=1000, callbacks=[_progress_callback])
 
     print("\nOptimization Finished.")
     print("Best Trial:")

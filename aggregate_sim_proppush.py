@@ -43,7 +43,11 @@ MODELS_TO_COMPARE = {
             "force_input": "No"
         },
     r"PhyPush arm-conditioned": {
-        "path": os.path.join(BASE_RUN_DIR, "20260811_184657", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
+            "path": os.path.join(BASE_RUN_DIR, "20260811_184657", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
+            "force_input": "No"
+        },
+    r"PhyPush arm-conditioned 2": {
+        "path": os.path.join(BASE_RUN_DIR, "20260811_221243", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
         "force_input": "No"
     },
 
