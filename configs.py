@@ -92,7 +92,7 @@ if FRAME_MODE == "world":
 elif FRAME_MODE == "local":
     if MULTI_ANGLE:
         # CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper_multi_angle.csv"
-        CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper_multi_angle_v2_test.csv"
+        CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper_multi_angle_v2.csv"
     else:
         # CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_trans_cube.csv" # force_v2, force_v3
         CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper.csv" # force_v4
@@ -372,7 +372,7 @@ config_multi_angle = {
     'dropout': 0.0004615346900806658,
     'sharpness': 1.0,
     'cross_sharpness': 1.2965844927099692,
-    'm_sharpness': 5.0,
+    'm_sharpness': 3.9822290389819024,
     'mu_sharpness': 9.814362222938573,
     'init_lr': 9.223299520640666e-05,
     'pinn_criterion': "L1",

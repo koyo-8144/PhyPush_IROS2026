@@ -25,8 +25,7 @@ SMOOTHING_WINDOW_SIZE = 3
 TOP_NUM = 10
 
 if MULTI_ANGLE:
-    time = "20260811_184657"
-    # time = "20260811_221243"
+    time = "20260813_075042"
     model = "pinn_pcri-L1_p5c10.0_multiangle"
 else:
     time = "20260811_063229"
