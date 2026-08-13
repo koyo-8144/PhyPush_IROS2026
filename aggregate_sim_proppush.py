@@ -38,18 +38,18 @@ MODELS_TO_COMPARE = {
     #     "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260625_165857.csv",
     #     "force_input": "No"
     # },
-    r"PhyPush": {
+    r"PhyPush original": {
             "path": os.path.join(BASE_RUN_DIR, "20260811_063229", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
             "force_input": "No"
         },
-    r"PhyPush arm-conditioned": {
+    r"PhyPush multi-angle arm-conditioned": {
             "path": os.path.join(BASE_RUN_DIR, "20260813_075042", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
             "force_input": "No"
         },
-    # r"PhyPush arm-conditioned 2": {
-    #     "path": os.path.join(BASE_RUN_DIR, "20260811_221243", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
-    #     "force_input": "No"
-    # },
+    r"PhyPush multi-angle no arm-conditioned": {
+        "path": os.path.join(BASE_RUN_DIR, "20260813_183333", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
+        "force_input": "No"
+    },
 
 }
 

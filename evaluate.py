@@ -26,6 +26,7 @@ TOP_NUM = 10
 
 if MULTI_ANGLE:
     time = "20260813_075042"
+    time = "20260813_183333"
     model = "pinn_pcri-L1_p5c10.0_multiangle"
 else:
     time = "20260811_063229"
