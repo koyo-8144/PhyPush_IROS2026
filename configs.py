@@ -92,7 +92,7 @@ if FRAME_MODE == "world":
 elif FRAME_MODE == "local":
     if MULTI_ANGLE:
         # CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper_multi_angle.csv"
-        CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper_multi_angle_v2.csv"
+        CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper_multi_angle_v3.csv"
     else:
         # CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_trans_cube.csv" # force_v2, force_v3
         CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper.csv" # force_v4
