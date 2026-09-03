@@ -50,6 +50,10 @@ MODELS_TO_COMPARE = {
         "path": os.path.join(BASE_RUN_DIR, "20260813_183333", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
         "force_input": "No"
     },
+    r"PropPush multi-angle arm-conditioned": {
+            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260816_153914.csv",
+            "force_input": "No"
+    },
 
 }
 
