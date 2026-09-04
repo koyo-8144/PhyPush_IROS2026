@@ -41,7 +41,7 @@ FRAME_MODE = "local"
 # A plain random split would place the same (mass, mu) pair in both train and
 # val (it appears ~20 times), making validation error meaningless.
 # =============================================================================
-MULTI_ANGLE = True
+MULTI_ANGLE = False
 
 # =============================================================================
 # USE_ARM_STATE
@@ -58,7 +58,7 @@ MULTI_ANGLE = True
 # worst_manipulability shows no relationship with error, the extra 28 input
 # dimensions will not help.
 # =============================================================================
-USE_ARM_STATE = True
+USE_ARM_STATE = False
 
 
 # Which of the newly recorded quantities to condition on.
