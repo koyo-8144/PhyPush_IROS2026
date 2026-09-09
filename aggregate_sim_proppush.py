@@ -15,45 +15,30 @@ BASE_RUN_DIR = "/home/psxkf4/PhyPush/results/checkpoints/from_20260811"
 
 csv_file = "domain_evaluation_summary.csv"
 MODELS_TO_COMPARE = {
+    # r"Baseline~\cite{mavrakis_estimating_2020}": {
+    #     "path": f"/home/psxkf4/phypush_training/results/checkpoints/baseline_random_forest/{csv_file}",
+    #     "force_input": "Yes"
+    # },
+    # r"PhyPush original": {
+    #         "path": os.path.join(BASE_RUN_DIR, "20260811_063229", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
+    #         "force_input": "No"
+    #     },
     r"Baseline~\cite{mavrakis_estimating_2020}": {
-        "path": f"/home/psxkf4/phypush_training/results/checkpoints/baseline_random_forest/{csv_file}",
-        "force_input": "Yes"
-    },
-    # r"PhyPush open gripper": {
-    #     "path": os.path.join(BASE_RUN_DIR, "20260619_202230", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
-    #     "force_input": "No"
-    # },
-
-    # r"PhyPush closed gripper": {
-    #     "path": os.path.join(BASE_RUN_DIR, "20260625_165857", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
-    #     "force_input": "No"
-    # },
-
-    # r"PropPush open gripper": {
-    #     "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260619_202230.csv",
-    #     "force_input": "No"
-    # },
-
-    # r"PropPush closed gripper": {
-    #     "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260625_165857.csv",
-    #     "force_input": "No"
-    # },
-    r"PhyPush original": {
-            "path": os.path.join(BASE_RUN_DIR, "20260811_063229", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
+            "path": f"/home/psxkf4/phypush_training/results/checkpoints/baseline_random_forest/{csv_file}",
+            "force_input": "Yes"
+        },
+    r"PhyPush multi-angle no arm-conditioned": {
+            "path": os.path.join(BASE_RUN_DIR, "20260813_183333", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
             "force_input": "No"
         },
     r"PhyPush multi-angle arm-conditioned": {
             "path": os.path.join(BASE_RUN_DIR, "20260816_153914", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
             "force_input": "No"
         },
-    r"PhyPush multi-angle no arm-conditioned": {
-        "path": os.path.join(BASE_RUN_DIR, "20260813_183333", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
-        "force_input": "No"
-    },
-    r"PropPush multi-angle arm-conditioned DDPM": {
-            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260816_153914_ddpm.csv",
-            "force_input": "No"
-    },
+    # r"PropPush multi-angle arm-conditioned DDPM": {
+    #         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260816_153914_ddpm.csv",
+    #         "force_input": "No"
+    # },
     r"PropPush multi-angle arm-conditioned DDIM": {
                 "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260816_153914_ddim.csv",
                 "force_input": "No"
