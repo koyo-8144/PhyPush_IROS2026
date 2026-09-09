@@ -23,25 +23,30 @@ MODELS_TO_COMPARE = {
     #         "path": os.path.join(BASE_RUN_DIR, "20260811_063229", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
     #         "force_input": "No"
     #     },
-    r"Baseline~\cite{mavrakis_estimating_2020}": {
-            "path": f"/home/psxkf4/phypush_training/results/checkpoints/baseline_random_forest/{csv_file}",
-            "force_input": "Yes"
+    r"MORF~\cite{mavrakis_estimating_2020}": {
+            "path": f"/home/psxkf4/PhyPush/results/checkpoints/baseline_random_forest/{csv_file}",
+            "force_input": "Yes",
+            "draw_thick_line": "No",
         },
-    r"PhyPush multi-angle no arm-conditioned": {
+    r"PhyPush~\cite{}": {
             "path": os.path.join(BASE_RUN_DIR, "20260813_183333", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
-            "force_input": "No"
+            "force_input": "No",
+            "draw_thick_line": "Yes",
         },
-    r"PhyPush multi-angle arm-conditioned": {
+
+    r"PhyPush arm-conditioned": {
             "path": os.path.join(BASE_RUN_DIR, "20260816_153914", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
-            "force_input": "No"
+            "force_input": "No",
+            "draw_thick_line": "No",
         },
     # r"PropPush multi-angle arm-conditioned DDPM": {
     #         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260816_153914_ddpm.csv",
     #         "force_input": "No"
     # },
-    r"PropPush multi-angle arm-conditioned DDIM": {
+    r"PropPush arm-conditioned DDIM": {
                 "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260816_153914_ddim.csv",
-                "force_input": "No"
+                "force_input": "No",
+                "draw_thick_line": "No",
         },
 
 }
@@ -229,11 +234,19 @@ def generate_main_tables(df, output_dir):
         latex_rows_nrmse_narrow.append("        " + " & ".join(tex_cols_n_s_mu) + r" \\")
         
         if idx < len(valid_models) - 1:
+            current_model = valid_models[idx]
             next_model = valid_models[idx + 1]
-            if force_input == "Yes" and MODELS_TO_COMPARE[next_model]["force_input"] == "No":
+            # if force_input == "Yes" and MODELS_TO_COMPARE[next_model]["force_input"] == "No":
+            #     latex_rows_nrmse_narrow.append(r"        \midrule")
+            #     latex_rows_nrmse_narrow.append(r"        \midrule")
+            # elif force_input == "No" and MODELS_TO_COMPARE[next_model]["force_input"] == "No":
+            #     latex_rows_nrmse_narrow.append(rf"        \cmidrule(lr){{3-{cols_span}}}")
+            # else:
+            #     latex_rows_nrmse_narrow.append(r"        \midrule")
+            if MODELS_TO_COMPARE[current_model]["draw_thick_line"] == "Yes":
                 latex_rows_nrmse_narrow.append(r"        \midrule")
                 latex_rows_nrmse_narrow.append(r"        \midrule")
-            elif force_input == "No" and MODELS_TO_COMPARE[next_model]["force_input"] == "No":
+            elif MODELS_TO_COMPARE[current_model]["draw_thick_line"] == "No":
                 latex_rows_nrmse_narrow.append(rf"        \cmidrule(lr){{3-{cols_span}}}")
             else:
                 latex_rows_nrmse_narrow.append(r"        \midrule")
@@ -248,6 +261,7 @@ def generate_main_tables(df, output_dir):
         f.write(r"\begin{table*}[tb]" + "\n")
         f.write(r"    \centering" + "\n")
         f.write(r"    \caption{Simulation (NRMSE $\pm$ std) ($\downarrow$) for Mass ($m$) and Friction ($\mu$) for seen and unseen domains. \textbf{\cmark} Requires force/torque input. \textbf{\xmark} Uses only kinematic velocity.\Done}" + "\n")
+        f.write(r"    \resizebox{\linewidth}{!}{%" + "\n")
         f.write(r"    \begin{tabular}{l|c| c| c| c c c c}" + "\n")
         f.write(r"        \toprule" + "\n")
         if INCLUDE_UNSEEN:
@@ -259,7 +273,7 @@ def generate_main_tables(df, output_dir):
         f.write(r"        \midrule" + "\n")
         f.write("\n".join(latex_rows_nrmse_narrow) + "\n")
         f.write(r"        \bottomrule" + "\n")
-        f.write(r"    \end{tabular}\label{tab:sim_nrmse}" + "\n")
+        f.write(r"    \end{tabular}}\label{tab:sim_nrmse}" + "\n")
         f.write(r"\end{table*}" + "\n")
 
     print(f"Generated Main NRMSE tables in: {output_dir}")

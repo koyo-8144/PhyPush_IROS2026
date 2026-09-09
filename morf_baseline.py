@@ -21,6 +21,8 @@ def set_seed(seed=42):
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     print(f"Global seed set to: {seed}")
@@ -139,13 +141,10 @@ def log_results_to_csv(m1, m2, m3, m4, domain_label, eval_checkpoint_dir, is_fir
 # ==========================================
 def main():
     set_seed(42)
-    
-    # 1. FORCE CPU TO AVOID DEADLOCKS
-    # PyTorch CUDA + sklearn joblib n_jobs=-1 causes fork deadlocks.
-    device = torch.device("cpu")
-    print(f"Forcing RF evaluation to: {device} to prevent multiprocessing hang.")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using Device: {device}")
 
-    # 2. LOAD DATA & INITIALIZE DATALOADERS
+    # 1. LOAD DATA & INITIALIZE DATALOADERS
     df = load_dataset_csv()
     if 'gt_fric_force' in df.columns:
         df['gt_fric_force'] = df['gt_fric_force'].apply(clean_force_col)
@@ -155,7 +154,10 @@ def main():
         df, batch_size, M_SEEN_MIN, M_SEEN_MAX, MU_SEEN_MIN, MU_SEEN_MAX
     )
 
-    # 3. EXTRACT RF TRAINING DATA
+    acc_cols = sorted([c for c in df.columns if "input_acc_" in c], key=lambda x: int(x.split('_')[-1]))
+    vel_cols = sorted([c for c in df.columns if "input_vel_" in c], key=lambda x: int(x.split('_')[-1]))
+
+    # 2. EXTRACT RF TRAINING DATA
     X_vel_train = train_loader.dataset.tensors[1]
     y_train = train_loader.dataset.tensors[2]
     rhs_acc_train = train_loader.dataset.tensors[4]
@@ -164,9 +166,7 @@ def main():
     eval_checkpoint_dir = os.path.join(checkpoint_dir, "baseline_random_forest")
     os.makedirs(eval_checkpoint_dir, exist_ok=True)
 
-    print("\n" + "="*50)
-    print("TRAINING PAPER BASELINE: MULTI-OUTPUT RANDOM FOREST")
-    print("="*50)
+    print("--- Starting Random Forest Training ---")
 
     def extract_windowed_stats(signal_tensor):
         _, sequence_length = signal_tensor.shape
@@ -195,15 +195,20 @@ def main():
 
     y_train_rf = y_train.numpy()
 
+    # NOTE: n_jobs=-1 removed to prevent multi-processing deadlock with PyTorch CUDA hooks
     regr_multirf = MultiOutputRegressor(
-        RandomForestRegressor(n_estimators=100, max_depth=30, random_state=42, n_jobs=-1)
+        RandomForestRegressor(n_estimators=100, max_depth=30, random_state=42)
     )
     print(f"Training on {len(X_train_rf)} samples...")
     regr_multirf.fit(X_train_rf, y_train_rf)
     print("Baseline Training Complete!")
 
-    # 4. EVALUATION DOMAIN SCORING
-    if INCLUDE_UNSEEN:
+    # 3. EVALUATION DOMAIN SCORING
+    if not INCLUDE_UNSEEN:
+        domain_choices = ['m_seen_light', 'm_seen_middle', 'm_seen_heavy']
+        global_m_range = M_SEEN_MAX - M_SEEN_MIN  
+        global_mu_range = MU_SEEN_MAX - MU_SEEN_MIN 
+    else:
         domain_choices = [
             'm_seen_mu_seen', 'm_seen_light', 'm_seen_middle', 'm_seen_heavy',
             'm_over', 'm_under', 'mu_over', 'mu_under',
@@ -211,51 +216,31 @@ def main():
         ]
         global_m_range = M_UNSEEN_MAX - M_SEEN_MIN  
         global_mu_range = MU_UNSEEN_MAX - MU_SEEN_MIN 
-    else:
-        domain_choices = ['m_seen_light', 'm_seen_middle', 'm_seen_heavy']
-        global_m_range = M_SEEN_MAX - M_SEEN_MIN  
-        global_mu_range = MU_SEEN_MAX - MU_SEEN_MIN 
 
-    acc_cols = sorted([c for c in df.columns if "input_acc_" in c], key=lambda x: int(x.split('_')[-1]))
-    vel_cols = sorted([c for c in df.columns if "input_vel_" in c], key=lambda x: int(x.split('_')[-1]))
-
-    print("Calculating global force bounds (memory safe)...")
-    valid_mask = (df['start_t'] + seq_len <= 100).values
-    valid_indices = np.where(valid_mask)[0]
+    # Vectorized fast retrieval of net/fric ranges directly from existing dataloaders
+    all_net_f_tensor = torch.cat([train_loader.dataset.tensors[5], val_loader.dataset.tensors[5]], dim=0)
+    all_table_fz_tensor = torch.cat([train_loader.dataset.tensors[6], val_loader.dataset.tensors[6]], dim=0)
     
-    # Avoid allocating a massive copy of the 12GB dataset; extract directly using numpy arrays
-    sample_indices = np.random.choice(valid_indices, size=min(2000, len(valid_indices)), replace=False)
-    
-    all_net_f_vals, all_table_fz_vals = [], []
-    for idx in sample_indices:
-        row = df.iloc[idx].to_dict()
-        st = int(row['start_t'])
-        window = range(st, st + seq_len)
-        if FRAME_MODE == "world":
-            all_net_f_vals.extend([row[f"pinn_LHS_wrench_t{t}_ax3"] for t in window])
-            all_table_fz_vals.extend([row[f"pinn_table_wrench_t{t}_ax5"] for t in window])
-        else:
-            all_net_f_vals.extend([row[f"pinn_LHS_wrench_t{t}_ax5"] for t in window])
-            all_table_fz_vals.extend([row[f"pinn_table_wrench_t{t}_ax3"] for t in window])
+    global_net_f_range = (all_net_f_tensor.max() - all_net_f_tensor.min()).item()
+    global_fric_f_range = (df['gt_mu'].max() * torch.abs(all_table_fz_tensor).max()).item()
 
-    global_net_f_range = np.max(all_net_f_vals) - np.min(all_net_f_vals)
-    global_fric_f_range = df['gt_mu'].max() * np.max(np.abs(all_table_fz_vals))
-
+    print("--- Starting Simulation Evaluation ---")
     for i, target_domain in enumerate(domain_choices):
         base_domain = 'm_seen_mu_seen' if 'm_seen' in target_domain else target_domain
-        df_domain = df[(df['domain'] == base_domain) & (df['start_t'] + seq_len <= 100)]
-        
+        df_domain = df[(df['domain'] == base_domain) & (df['start_t'] + seq_len <= 100)].copy()
+
         if target_domain == 'm_seen_light':
             df_domain = df_domain[df_domain['gt_mass'] < 0.8]
         elif target_domain == 'm_seen_middle':
             df_domain = df_domain[(df_domain['gt_mass'] >= 0.8) & (df_domain['gt_mass'] < 1.4)]
         elif target_domain == 'm_seen_heavy':
             df_domain = df_domain[df_domain['gt_mass'] >= 1.4]
-        
-        if len(df_domain) == 0: 
+
+        if len(df_domain) == 0:
+            print(f">>> Skipping Domain: {target_domain} (No samples fit criteria)")
             continue
-        
-        print(f"   Evaluating Domain: {target_domain} ({len(df_domain)} samples)")
+
+        print(f">>> Processing Domain: {target_domain} ({len(df_domain)} samples)")
 
         X_acc = torch.tensor(df_domain[acc_cols].values.reshape(-1, seq_len, 1)).float().to(device)
         X_vel = torch.tensor(df_domain[vel_cols].values.reshape(-1, seq_len, 1)).float().to(device)
@@ -263,12 +248,10 @@ def main():
 
         robot_fz_list, rhs_acc_list = [], []
         lhs_net_f_list, table_fz_list, robot_fx_list = [], [], []
-        
-        # O(1) dictionary parsing prevents Pandas Series allocation blocks
-        df_records = df_domain.to_dict('records')
-        for row in df_records:
+
+        for _, row in df_domain.iterrows():
             st = int(row['start_t'])
-            window = range(st, st + seq_len) 
+            window = range(st, st + seq_len)
             
             if FRAME_MODE == "world":
                 robot_fz_list.append([row[f"pinn_robot_wrench_t{t}_ax5"] for t in window])
@@ -282,19 +265,19 @@ def main():
                 lhs_net_f_list.append([row[f"pinn_LHS_wrench_t{t}_ax5"] for t in window])
                 table_fz_list.append([row[f"pinn_table_wrench_t{t}_ax3"] for t in window])
                 robot_fx_list.append([row[f"pinn_robot_wrench_t{t}_ax5"] for t in window])
-        
-        fz_robot_tensor_dom = torch.tensor(np.array(robot_fz_list)).float().to(device)
-        rhs_acc_tensor_dom = torch.tensor(np.array(rhs_acc_list)).float().to(device)
-        fx_robot_tensor_dom = torch.tensor(np.array(robot_fx_list)).float().to(device)
+
+        fz_robot_tensor = torch.tensor(np.array(robot_fz_list)).float().to(device)
+        rhs_acc_tensor = torch.tensor(np.array(rhs_acc_list)).float().to(device)
+        fx_robot_tensor = torch.tensor(np.array(robot_fx_list)).float().to(device)
         net_f_gt_tensor = torch.tensor(np.array(lhs_net_f_list)).float().to(device)
         normal_f_gt = torch.abs(torch.tensor(np.array(table_fz_list)).float().to(device))
         fric_f_gt_tensor = y_gt[:, 1].unsqueeze(1) * normal_f_gt
 
-        u_x_dom = torch.cumsum(rhs_acc_tensor_dom, dim=1) * delta_t 
+        u_x_dom = torch.cumsum(rhs_acc_tensor, dim=1) * delta_t 
         u_px_dom = X_vel.squeeze(-1)
         
         X_rf_domain = torch.cat([
-            extract_windowed_stats(fx_robot_tensor_dom),
+            extract_windowed_stats(fx_robot_tensor),
             extract_windowed_stats(u_x_dom),
             extract_windowed_stats(u_px_dom)
         ], dim=1).cpu().numpy()
@@ -304,8 +287,8 @@ def main():
         mu_est = torch.tensor(preds_rf[:, 1]).float().to(device)
         mass_gt, mu_gt = y_gt[:, 0], y_gt[:, 1]
 
-        phys_net = mass_est.unsqueeze(1) * rhs_acc_tensor_dom
-        mean_robot_f_z = fz_robot_tensor_dom
+        phys_net = mass_est.unsqueeze(1) * rhs_acc_tensor
+        mean_robot_f_z = fz_robot_tensor
         if FRAME_MODE == "local":
             mean_robot_f_z = -mean_robot_f_z
             
@@ -313,13 +296,13 @@ def main():
         phys_fric = mu_est.unsqueeze(1) * calc_normal
 
         m1 = _run_exp_1(mass_gt, mu_gt, mass_est, mu_est, global_m_range, global_mu_range)
-        m2 = _run_exp_2(mass_est, mu_est, phys_fric, fz_robot_tensor_dom, seq_len)
-        m3 = _run_exp_3(mass_est, rhs_acc_tensor_dom, phys_net, seq_len)
+        m2 = _run_exp_2(mass_est, mu_est, phys_fric, fz_robot_tensor, seq_len)
+        m3 = _run_exp_3(mass_est, rhs_acc_tensor, phys_net, seq_len)
         m4 = _run_exp_4(net_f_gt_tensor, fric_f_gt_tensor, phys_net, phys_fric, global_net_f_range, global_fric_f_range)
         
         log_results_to_csv(m1, m2, m3, m4, target_domain, eval_checkpoint_dir, is_first=(i == 0))
 
-    print(f"\nDone. RF Baseline Summary saved in: {eval_checkpoint_dir}/domain_evaluation_summary.csv")
+    print(f"Done. RF Baseline Summary saved in: {eval_checkpoint_dir}/domain_evaluation_summary.csv")
 
 if __name__ == "__main__":
     main()
