@@ -13,9 +13,8 @@ from IPython.display import clear_output
 from utils import set_seed, build_model_string, clean_force_col
 from models import PhysicsTransformerEstimator
 from losses import log_mse_loss, PinnLossCalculator
-from dataset import create_dataloaders
-from configs import used_config, CSV_PATH
-from dataset import load_dataset_csv, ARM_DIM
+from dataset import create_dataloaders, load_dataset_csv
+from configs import used_config, CSV_PATH, INPUT_VARIANT, COND_DIM, INPUT_DIM
 
 
 def main():
@@ -81,6 +80,14 @@ def main():
     diff_coeffs_pinn4 = config['diff_coeffs_pinn4']
     frame_mode = config['frame_mode']
     use_arm_state = config.get('use_arm_state', False)
+    input_variant = config.get('input_variant', 'vel_only')
+    cond_dimension = config.get('cond_dim', 0)
+    input_dimension = config.get('input_dim', 1)
+    # A variant is either a scalar condition or an extra sequence channel.
+    use_cond = cond_dimension > 0
+    use_seq_channel = input_dimension > 1
+    print(f"[VARIANT] {input_variant}: input_dim={input_dimension}, "
+          f"cond_dim={cond_dimension}")
 
     p_c = config['pinn_coeffs']
     pinn_coeff_1 = p_c['p1']
@@ -122,7 +129,7 @@ def main():
     # ==========================================
     # 2. PATHS & SAVING CONFIG
     # ==========================================
-    train_from = "from_20260811"
+    train_from = "from_20260913"
     current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     
     training_model = build_model_string(config) 
@@ -139,10 +146,8 @@ def main():
     # ==========================================
     # 3. MODEL SETUP & INIT
     # ==========================================
-    cond_dimension = ARM_DIM if use_arm_state else 0
-
     model = PhysicsTransformerEstimator(
-        input_dim=1,          
+        input_dim=input_dimension,
         d_model=d_model,           
         nhead=4,              
         num_encoder_layers=num_enc, 
@@ -243,8 +248,11 @@ def main():
             b_start_t = batch[7].to(device)
             b_robot_fx = batch[8].to(device)
             
-            # Dynamically handle the condition token
-            b_cond = batch[9].to(device) if use_arm_state else None
+            
+            # batch[9] is the cond token OR the extra channel, never both.
+            b_cond = batch[9].to(device) if use_cond else None
+            b_seq = batch[9].to(device) if use_seq_channel else None
+            b_input = torch.cat([b_vel, b_seq], dim=-1) if use_seq_channel else b_vel
 
             # =======================================================
             # LOCAL FRAME ALIGNMENT FIX
@@ -255,7 +263,7 @@ def main():
 
             optimizer.zero_grad()
             
-            output, (c_weights, m_weights, f_weights), (net_f_est, fric_f_est) = model(b_vel, cond=b_cond)
+            output, (c_weights, m_weights, f_weights), (net_f_est, fric_f_est) = model(b_input, cond=b_cond)
 
             m_gt = b_y[:, 0].unsqueeze(1)
             mu_gt = b_y[:, 1].unsqueeze(1)
@@ -491,8 +499,9 @@ def main():
                 b_start_t = batch[7].to(device)
                 b_robot_fx = batch[8].to(device)
 
-                # Dynamically handle the condition token
-                b_cond = batch[9].to(device) if use_arm_state else None
+                b_cond = batch[9].to(device) if use_cond else None
+                b_seq = batch[9].to(device) if use_seq_channel else None
+                b_input = torch.cat([b_vel, b_seq], dim=-1) if use_seq_channel else b_vel
 
                 # =======================================================
                 # LOCAL FRAME ALIGNMENT FIX
@@ -501,7 +510,7 @@ def main():
                     b_robot_fz = -b_robot_fz
                 # ======================================================
 
-                output, _, (net_f_est_val, fric_f_est_val) = model(b_vel, cond=b_cond) 
+                output, _, (net_f_est_val, fric_f_est_val) = model(b_input, cond=b_cond)
                 
                 m_gt_val = b_y[:, 0].unsqueeze(1)
                 mu_gt_val = b_y[:, 1].unsqueeze(1)

@@ -10,7 +10,9 @@ from sklearn.metrics import r2_score
 from sklearn.model_selection import GroupShuffleSplit
 
 from models import PhysicsTransformerEstimator
-from dataset import create_dataloaders, load_dataset_csv, get_arm_feature_cols, load_arm_stats, ARM_DIM
+from dataset import (create_dataloaders, load_dataset_csv, load_arm_stats,
+                     window_cols)
+from configs import INPUT_VARIANT, COND_DIM, INPUT_DIM, VARIANT_WINDOW_PREFIX
 from utils import set_seed, clean_force_col
 from configs import (M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN,
                      M_UNSEEN_MAX, MU_UNSEEN_MAX, GLOBAL_M_RANGE, GLOBAL_MU_RANGE,
@@ -53,21 +55,16 @@ else:
 def get_eval_arm_stats():
     """Load the standardization stats that TRAINING saved.
 
-    Recomputing at eval time is what corrupted the earlier conditioned run: any
-    mismatch in filtering/split/precision mis-scales the token and can wreck a
-    model that leaned on it. So we load the exact training stats instead.
-
-    Returns (feature_cols, mean, std) with mean/std shaped (1, n_features).
+    Never recomputed here: any mismatch in filtering, split or float path
+    mis-scales the input and can wreck a model that leaned on it.
     """
-    feature_cols, mean, std = load_arm_stats()   # sidecar written by training
-    # Shape guard: stats must be (1, n).
+    feature_cols, mean, std = load_arm_stats()
     mean = np.asarray(mean, dtype=np.float32).reshape(1, -1)
     std = np.asarray(std, dtype=np.float32).reshape(1, -1)
-    print(f"[ARM_STATE] loaded training stats for {feature_cols}")
-    print(f"[ARM_STATE]   mean={np.round(mean.flatten(), 4)}, "
-          f"std={np.round(std.flatten(), 4)}")
+    print(f"[VARIANT] loaded training stats for {feature_cols}")
+    print(f"[VARIANT]   mean={np.round(mean.flatten(), 6)}, "
+          f"std={np.round(std.flatten(), 6)}")
     return feature_cols, mean, std
-
 
 # ==========================================
 # EXPERIMENT FUNCTIONS
@@ -248,40 +245,44 @@ def main():
     acc_cols = sorted([c for c in df.columns if "input_acc_" in c], key=lambda x: int(x.split('_')[-1]))
     vel_cols = sorted([c for c in df.columns if "input_vel_" in c], key=lambda x: int(x.split('_')[-1]))
 
-    # =================================================================
-    # ARM CONDITIONING SETUP
-    # Standardize the SELECTED feature columns with the SAME train-split stats
-    # used at training time, then stash them as _cond_j columns. Standardization
-    # is row-independent, so later slicing into domains keeps rows aligned.
-    # =================================================================
     use_arm_state = config.get('use_arm_state', False)
+    input_variant = config.get('input_variant', 'vel_only')
+    cond_dimension = config.get('cond_dim', 0)
+    input_dimension = config.get('input_dim', 1)
+    use_cond = cond_dimension > 0
+    use_seq_channel = input_dimension > 1
+    print(f"[VARIANT] {input_variant}: input_dim={input_dimension}, "
+          f"cond_dim={cond_dimension}")
 
+    _cond_cols, _seq_cols = [], []
     if use_arm_state:
-        cond_dimension = ARM_DIM
-        feat_cols, arm_mean, arm_std = get_eval_arm_stats()
+        _, stat_mean, stat_std = get_eval_arm_stats()
 
-        if cond_dimension != len(feat_cols):
-            raise ValueError(
-                f"ARM_DIM ({cond_dimension}) != number of feature columns "
-                f"({len(feat_cols)}). configs.ARM_FEATURE_MODE and the checkpoint "
-                f"disagree."
-            )
+        wcols = window_cols(df, VARIANT_WINDOW_PREFIX)
+        if not wcols:
+            raise ValueError(f"No '{VARIANT_WINDOW_PREFIX}*' columns for variant "
+                             f"'{input_variant}'.")
+        W = df[wcols].values.astype(np.float32)
 
-        cond_arr = (df[feat_cols].values.astype(np.float32) - arm_mean) / arm_std
-        # Build all cond columns at once to avoid DataFrame fragmentation.
-        cond_frame = pd.DataFrame(
-            cond_arr,
-            columns=[f'_cond_{j}' for j in range(len(feat_cols))],
-            index=df.index
-        )
-        df = pd.concat([df, cond_frame], axis=1)
-        _cond_cols = list(cond_frame.columns)
-    else:
-        cond_dimension = 0
-        _cond_cols = []
+        if use_cond:
+            # Same reduction as training: MINIMUM over the 60-step window, not
+            # the whole-push `worst_*` column.
+            raw = W.min(axis=1, keepdims=True)
+            cond_arr = (raw - stat_mean) / stat_std
+            cond_frame = pd.DataFrame(cond_arr, columns=['_cond_0'], index=df.index)
+            df = pd.concat([df, cond_frame], axis=1)
+            _cond_cols = ['_cond_0']
+        else:
+            seq_arr = (W - stat_mean) / stat_std
+            seq_frame = pd.DataFrame(
+                seq_arr, columns=[f'_seq_{j}' for j in range(len(wcols))],
+                index=df.index)
+            df = pd.concat([df, seq_frame], axis=1)
+            _seq_cols = list(seq_frame.columns)
+
 
     model = PhysicsTransformerEstimator(
-        input_dim=1,
+        input_dim=input_dimension,
         d_model=config['d_model'],
         nhead=4,
         num_encoder_layers=config['num_enc'],
@@ -294,7 +295,7 @@ def main():
         version=config['transformer_ver'],
         max_mass_scale=config['last_layer_ms'],
         max_mu_scale=config['last_layer_mus'],
-        cond_dim=cond_dimension  # 0, or ARM_DIM for the selected feature mode
+        cond_dim=cond_dimension
     ).to(device)
 
     if os.path.exists(WEIGHTS_PATH):
@@ -343,7 +344,13 @@ def main():
         # Conditioning: standardized _cond columns, sliced from the SAME
         # df_domain rows as X_vel, so they stay row-aligned.
         b_cond = (torch.tensor(df_domain[_cond_cols].values).float().to(device)
-                  if use_arm_state else None)
+                  if use_cond else None)
+
+        if use_seq_channel:
+            seq_np = df_domain[_seq_cols].values.astype(np.float32)[:, :, None]
+            X_in = torch.cat([X_vel, torch.tensor(seq_np).to(device)], dim=-1)
+        else:
+            X_in = X_vel
 
         robot_fz_list, rhs_acc_list = [], []
         lhs_net_f_list, table_fz_list = [], []
@@ -365,7 +372,7 @@ def main():
 
         model.eval()
         with torch.no_grad():
-            preds, _, _ = model(X_vel, cond=b_cond)
+            preds, _, _ = model(X_in, cond=b_cond)
             mass_est, mu_est = preds[:, 0], preds[:, 1]
             mass_gt, mu_gt = y_gt[:, 0], y_gt[:, 1]
 
@@ -425,18 +432,37 @@ def main():
                     # so zeros == "training mean posture": a fixed fictitious
                     # configuration applied to every real run. Real-data numbers
                     # are therefore NOT conditioned in any meaningful sense.
-                    if use_arm_state:
-                        if not _warned_real_cond[0]:
-                            print("[ARM_STATE][WARNING] Real captures lack the arm "
-                                  "conditioning columns; using the training mean "
-                                  "posture (zeros) for all real runs. Real-data "
-                                  "numbers are not meaningfully conditioned.")
-                            _warned_real_cond[0] = True
-                        b_cond_real = torch.zeros((1, ARM_DIM)).float().to(device)
+                    if use_cond:
+                        if VARIANT_WINDOW_PREFIX == 'arm_dir_manip_w':
+                            raise ValueError(
+                                "Variant 'vel_dirmanip_cond' cannot be evaluated on "
+                                "real data: collect_multi_angle_data.py records "
+                                "'manipulability' but not directional manipulability. "
+                                "Add w_dir to the real collector first.")
+                        if 'manipulability' not in df_inf.columns:
+                            raise ValueError("Real CSV has no 'manipulability' column.")
+                        raw_w = float(df_inf['manipulability'].min())
+                        b_cond_real = torch.tensor(
+                            [[(raw_w - stat_mean[0, 0]) / stat_std[0, 0]]]
+                        ).float().to(device)
                     else:
                         b_cond_real = None
 
-                    preds, _, _ = model(X_vel_real, cond=b_cond_real)
+                    if use_seq_channel:
+                        if VARIANT_WINDOW_PREFIX == 'arm_dir_manip_w':
+                            raise ValueError(
+                                "Variant 'vel_dirmanip_seq' cannot be evaluated on "
+                                "real data -- see above.")
+                        seq_real = df_inf['manipulability'].values.astype(np.float32)
+                        seq_real = (seq_real - stat_mean[0, 0]) / stat_std[0, 0]
+                        X_in_real = torch.cat([
+                            X_vel_real,
+                            torch.tensor(seq_real).view(1, -1, 1).to(device)
+                        ], dim=-1)
+                    else:
+                        X_in_real = X_vel_real
+
+                    preds, _, _ = model(X_in_real, cond=b_cond_real)
                     m_est = preds[0, 0].item()
                     mu_est = preds[0, 1].item()
 

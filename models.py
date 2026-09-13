@@ -267,6 +267,10 @@ class PhysicsTransformerEstimator(nn.Module):
         if self.cond_dim > 0 and self.version in [3, 4, 5, 6, 7, 8]:
             phys_net = phys_net[:, 1:, :]
             phys_fric = phys_fric[:, 1:, :]
+        assert phys_net.shape[1] == T, (
+            f"phys_net has {phys_net.shape[1]} steps but the input had {T}. "
+            f"The condition token was not stripped; PINN residuals would be "
+            f"compared against misaligned timesteps.")
 
         q_m_batch = self.q_mass.expand(B, -1, -1)
         if self.version in [1, 3, 4, 5, 6, 7, 8]:

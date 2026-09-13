@@ -79,4 +79,9 @@ def build_model_string(config):
     if config.get('multi_angle', False):
         parts.append("multiangle")
 
+    # Tag the INPUT variant so the five ablations do not overwrite each other.
+    variant = config.get('input_variant', 'vel_only')
+    if variant != 'vel_only':
+        parts.append(variant)
+
     return "_".join(parts)
