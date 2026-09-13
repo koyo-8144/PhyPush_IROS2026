@@ -11,40 +11,73 @@ ABLATION_DIR = os.path.join(OUTPUT_DIR, "ablation")
 PHYSICS_DIR = os.path.join(OUTPUT_DIR, "physics_fidelity")
 
 
-BASE_RUN_DIR = "/home/psxkf4/PhyPush/results/checkpoints/from_20260811"
+BASE_RUN_DIR = "/home/psxkf4/PhyPush/results/checkpoints/from_20260913"
 
 csv_file = "domain_evaluation_summary.csv"
 MODELS_TO_COMPARE = {
-    # r"Baseline~\cite{mavrakis_estimating_2020}": {
-    #     "path": f"/home/psxkf4/phypush_training/results/checkpoints/baseline_random_forest/{csv_file}",
-    #     "force_input": "Yes"
-    # },
-    # r"PhyPush original": {
-    #         "path": os.path.join(BASE_RUN_DIR, "20260811_063229", f"pinn_pcri-L1_p5c10.0/{csv_file}"),
-    #         "force_input": "No"
+    # r"MORF~\cite{mavrakis_estimating_2020}": {
+    #         "path": f"/home/psxkf4/PhyPush/results/checkpoints/baseline_random_forest/{csv_file}",
+    #         "force_input": "Yes",
+    #         "draw_thick_line": "No",
     #     },
+    # r"PhyPush~\cite{}": {
+    #         "path": os.path.join(BASE_RUN_DIR, "20260813_183333", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
+    #         "force_input": "No",
+    #         "draw_thick_line": "Yes",
+    #     },
+
+    # r"PhyPush arm-conditioned": {
+    #         "path": os.path.join(BASE_RUN_DIR, "20260816_153914", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
+    #         "force_input": "No",
+    #         "draw_thick_line": "No",
+    #     },
+    # # r"PropPush multi-angle arm-conditioned DDPM": {
+    # #         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260816_153914_ddpm.csv",
+    # #         "force_input": "No"
+    # # },
+    # r"PropPush arm-conditioned DDIM": {
+    #             "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260816_153914_ddim.csv",
+    #             "force_input": "No",
+    #             "draw_thick_line": "No",
+    #     },
+
     r"MORF~\cite{mavrakis_estimating_2020}": {
-            "path": f"/home/psxkf4/PhyPush/results/checkpoints/baseline_random_forest/{csv_file}",
-            "force_input": "Yes",
-            "draw_thick_line": "No",
+                "path": f"/home/psxkf4/PhyPush/results/checkpoints/baseline_random_forest/{csv_file}",
+                "force_input": "Yes",
+                "draw_thick_line": "No",
         },
     r"PhyPush~\cite{}": {
-            "path": os.path.join(BASE_RUN_DIR, "20260813_183333", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
+            "path": os.path.join(BASE_RUN_DIR, "20260913_134633", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
             "force_input": "No",
             "draw_thick_line": "Yes",
         },
 
-    r"PhyPush arm-conditioned": {
-            "path": os.path.join(BASE_RUN_DIR, "20260816_153914", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
+    r"PhyPush worst manip cond": {
+            "path": os.path.join(BASE_RUN_DIR, "20260913_102210", f"pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond/{csv_file}"),
             "force_input": "No",
             "draw_thick_line": "No",
         },
+    r"PhyPush worst dir manip cond": {
+                "path": os.path.join(BASE_RUN_DIR, "20260913_110510", f"pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond/{csv_file}"),
+                "force_input": "No",
+                "draw_thick_line": "No",
+            },
+    r"PhyPush manip seq input": {
+                "path": os.path.join(BASE_RUN_DIR, "20260913_120624", f"pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq/{csv_file}"),
+                "force_input": "No",
+                "draw_thick_line": "No",
+            },
+    r"PhyPush dir manip seq input": {
+                "path": os.path.join(BASE_RUN_DIR, "20260913_124812", f"pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq/{csv_file}"),
+                "force_input": "No",
+                "draw_thick_line": "No",
+            },
     # r"PropPush multi-angle arm-conditioned DDPM": {
     #         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260816_153914_ddpm.csv",
     #         "force_input": "No"
     # },
     r"PropPush arm-conditioned DDIM": {
-                "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260816_153914_ddim.csv",
+                "path": "",
                 "force_input": "No",
                 "draw_thick_line": "No",
         },

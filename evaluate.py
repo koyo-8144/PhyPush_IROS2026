@@ -27,13 +27,26 @@ SMOOTHING_WINDOW_SIZE = 3
 TOP_NUM = 10
 
 if MULTI_ANGLE:
-    time = "20260816_153914"
-    model = "pinn_pcri-L1_p5c10.0_multiangle"
+    if INPUT_VARIANT == "vel_manip_cond":
+        time = "20260913_102210"
+        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond"
+    elif INPUT_VARIANT == "vel_dirmanip_cond":
+        time = "20260913_110510"
+        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond"
+    elif INPUT_VARIANT == "vel_manip_seq":
+        time = "20260913_120624"
+        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq"
+    elif INPUT_VARIANT == "vel_dirmanip_seq":
+        time = "20260913_124812"
+        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"    
+    elif INPUT_VARIANT == "vel_only":
+        time = "20260913_134633"
+        model = "pinn_pcri-L1_p5c10.0_multiangle"
 else:
     time = "20260811_063229"
     model = "pinn_pcri-L1_p5c10.0"
 
-CHECKPOINT_DIR = f"./results/checkpoints/from_20260811/{time}/{model}"
+CHECKPOINT_DIR = f"./results/checkpoints/from_20260913/{time}/{model}"
 
 WEIGHTS_PATH = os.path.join(CHECKPOINT_DIR, "transformer_epoch1000.pth")
 CONFIG_PATH = os.path.join(CHECKPOINT_DIR, "config.json")
@@ -384,298 +397,298 @@ def main():
 
     print(f"\nDone. Summary saved in {EVAL_CHECKPOINT_DIR}")
 
-    # ==========================================
-    # EVALUATION LOOP: REAL DATA
-    # ==========================================
-    real_eval_csv_path = os.path.join(EVAL_CHECKPOINT_DIR, "real_evaluation_summary.csv")
-    real_detailed_csv_path = os.path.join(EVAL_CHECKPOINT_DIR, "real_detailed_inference.csv")
+    # # ==========================================
+    # # EVALUATION LOOP: REAL DATA
+    # # ==========================================
+    # real_eval_csv_path = os.path.join(EVAL_CHECKPOINT_DIR, "real_evaluation_summary.csv")
+    # real_detailed_csv_path = os.path.join(EVAL_CHECKPOINT_DIR, "real_detailed_inference.csv")
 
-    _warned_real_cond = [False]   # warn-once guard for real-data conditioning
+    # _warned_real_cond = [False]   # warn-once guard for real-data conditioning
 
-    all_runs = []
-    if os.path.exists(OFFLINE_DATA_DIR):
-        condition_folders = [f.path for f in os.scandir(OFFLINE_DATA_DIR) if f.is_dir()]
+    # all_runs = []
+    # if os.path.exists(OFFLINE_DATA_DIR):
+    #     condition_folders = [f.path for f in os.scandir(OFFLINE_DATA_DIR) if f.is_dir()]
 
-        model.eval()
-        with torch.no_grad():
-            for folder in condition_folders:
-                condition_name = os.path.basename(folder)
-                gt_path = os.path.join(folder, "ground_truth.csv")
+    #     model.eval()
+    #     with torch.no_grad():
+    #         for folder in condition_folders:
+    #             condition_name = os.path.basename(folder)
+    #             gt_path = os.path.join(folder, "ground_truth.csv")
 
-                if not os.path.exists(gt_path):
-                    continue
+    #             if not os.path.exists(gt_path):
+    #                 continue
 
-                gt_df = pd.read_csv(gt_path)
-                gt_dict = dict(zip(gt_df['Parameter'], gt_df['Value']))
+    #             gt_df = pd.read_csv(gt_path)
+    #             gt_dict = dict(zip(gt_df['Parameter'], gt_df['Value']))
 
-                m_gt = float(gt_dict.get('M_GT', -1))
-                raw_mu = gt_dict.get('MU_GT', 'None')
-                mu_gt = float(raw_mu) if raw_mu not in ['None', 'N/A', 'NaN'] else np.nan
+    #             m_gt = float(gt_dict.get('M_GT', -1))
+    #             raw_mu = gt_dict.get('MU_GT', 'None')
+    #             mu_gt = float(raw_mu) if raw_mu not in ['None', 'N/A', 'NaN'] else np.nan
 
-                csv_pattern = os.path.join(folder, "*_100steps.csv")
-                for file_path in glob.glob(csv_pattern):
-                    run_name = os.path.basename(file_path).split('_100steps')[0]
-                    df_real = pd.read_csv(file_path)
+    #             csv_pattern = os.path.join(folder, "*_100steps.csv")
+    #             for file_path in glob.glob(csv_pattern):
+    #                 run_name = os.path.basename(file_path).split('_100steps')[0]
+    #                 df_real = pd.read_csv(file_path)
 
-                    df_real['v_y_smoothed'] = df_real['v_y'].rolling(window=SMOOTHING_WINDOW_SIZE, min_periods=1).mean()
-                    df_inf = df_real[df_real['is_inference_region'] == 1].copy()
+    #                 df_real['v_y_smoothed'] = df_real['v_y'].rolling(window=SMOOTHING_WINDOW_SIZE, min_periods=1).mean()
+    #                 df_inf = df_real[df_real['is_inference_region'] == 1].copy()
 
-                    if len(df_inf) != seq_len:
-                        continue
+    #                 if len(df_inf) != seq_len:
+    #                     continue
 
-                    vel_data = df_inf['v_y_smoothed'].values
-                    X_vel_real = torch.tensor(vel_data).unsqueeze(0).unsqueeze(-1).float().to(device)
+    #                 vel_data = df_inf['v_y_smoothed'].values
+    #                 X_vel_real = torch.tensor(vel_data).unsqueeze(0).unsqueeze(-1).float().to(device)
 
-                    # Real captures have no arm conditioning columns -- these are
-                    # sim-frame quantities not recorded on hardware. The
-                    # standardized mean of every arm feature is 0 by construction,
-                    # so zeros == "training mean posture": a fixed fictitious
-                    # configuration applied to every real run. Real-data numbers
-                    # are therefore NOT conditioned in any meaningful sense.
-                    if use_cond:
-                        if VARIANT_WINDOW_PREFIX == 'arm_dir_manip_w':
-                            raise ValueError(
-                                "Variant 'vel_dirmanip_cond' cannot be evaluated on "
-                                "real data: collect_multi_angle_data.py records "
-                                "'manipulability' but not directional manipulability. "
-                                "Add w_dir to the real collector first.")
-                        if 'manipulability' not in df_inf.columns:
-                            raise ValueError("Real CSV has no 'manipulability' column.")
-                        raw_w = float(df_inf['manipulability'].min())
-                        b_cond_real = torch.tensor(
-                            [[(raw_w - stat_mean[0, 0]) / stat_std[0, 0]]]
-                        ).float().to(device)
-                    else:
-                        b_cond_real = None
+    #                 # Real captures have no arm conditioning columns -- these are
+    #                 # sim-frame quantities not recorded on hardware. The
+    #                 # standardized mean of every arm feature is 0 by construction,
+    #                 # so zeros == "training mean posture": a fixed fictitious
+    #                 # configuration applied to every real run. Real-data numbers
+    #                 # are therefore NOT conditioned in any meaningful sense.
+    #                 if use_cond:
+    #                     if VARIANT_WINDOW_PREFIX == 'arm_dir_manip_w':
+    #                         raise ValueError(
+    #                             "Variant 'vel_dirmanip_cond' cannot be evaluated on "
+    #                             "real data: collect_multi_angle_data.py records "
+    #                             "'manipulability' but not directional manipulability. "
+    #                             "Add w_dir to the real collector first.")
+    #                     if 'manipulability' not in df_inf.columns:
+    #                         raise ValueError("Real CSV has no 'manipulability' column.")
+    #                     raw_w = float(df_inf['manipulability'].min())
+    #                     b_cond_real = torch.tensor(
+    #                         [[(raw_w - stat_mean[0, 0]) / stat_std[0, 0]]]
+    #                     ).float().to(device)
+    #                 else:
+    #                     b_cond_real = None
 
-                    if use_seq_channel:
-                        if VARIANT_WINDOW_PREFIX == 'arm_dir_manip_w':
-                            raise ValueError(
-                                "Variant 'vel_dirmanip_seq' cannot be evaluated on "
-                                "real data -- see above.")
-                        seq_real = df_inf['manipulability'].values.astype(np.float32)
-                        seq_real = (seq_real - stat_mean[0, 0]) / stat_std[0, 0]
-                        X_in_real = torch.cat([
-                            X_vel_real,
-                            torch.tensor(seq_real).view(1, -1, 1).to(device)
-                        ], dim=-1)
-                    else:
-                        X_in_real = X_vel_real
+    #                 if use_seq_channel:
+    #                     if VARIANT_WINDOW_PREFIX == 'arm_dir_manip_w':
+    #                         raise ValueError(
+    #                             "Variant 'vel_dirmanip_seq' cannot be evaluated on "
+    #                             "real data -- see above.")
+    #                     seq_real = df_inf['manipulability'].values.astype(np.float32)
+    #                     seq_real = (seq_real - stat_mean[0, 0]) / stat_std[0, 0]
+    #                     X_in_real = torch.cat([
+    #                         X_vel_real,
+    #                         torch.tensor(seq_real).view(1, -1, 1).to(device)
+    #                     ], dim=-1)
+    #                 else:
+    #                     X_in_real = X_vel_real
 
-                    preds, _, _ = model(X_in_real, cond=b_cond_real)
-                    m_est = preds[0, 0].item()
-                    mu_est = preds[0, 1].item()
+    #                 preds, _, _ = model(X_in_real, cond=b_cond_real)
+    #                 m_est = preds[0, 0].item()
+    #                 mu_est = preds[0, 1].item()
 
-                    fric_f_gt = m_gt * mu_gt * G if not np.isnan(mu_gt) else np.nan
-                    fric_f_est = m_est * mu_est * G
+    #                 fric_f_gt = m_gt * mu_gt * G if not np.isnan(mu_gt) else np.nan
+    #                 fric_f_est = m_est * mu_est * G
 
-                    all_runs.append({
-                        "domain": condition_name,
-                        "run": run_name,
-                        "m_gt": m_gt,
-                        "m_est": m_est,
-                        "mu_gt": mu_gt,
-                        "mu_est": mu_est,
-                        "fric_f_gt": fric_f_gt,
-                        "fric_f_est": fric_f_est,
-                        "abs_mass_err": abs(m_est - m_gt),
-                        "abs_mu_err": abs(mu_est - mu_gt) if not np.isnan(mu_gt) else np.nan,
-                        "abs_fric_f_err": abs(fric_f_est - fric_f_gt) if not np.isnan(fric_f_gt) else np.nan
-                    })
-    else:
-        print(f"Warning: Offline data directory not found at {OFFLINE_DATA_DIR}. Skipping Real World Inference.")
+    #                 all_runs.append({
+    #                     "domain": condition_name,
+    #                     "run": run_name,
+    #                     "m_gt": m_gt,
+    #                     "m_est": m_est,
+    #                     "mu_gt": mu_gt,
+    #                     "mu_est": mu_est,
+    #                     "fric_f_gt": fric_f_gt,
+    #                     "fric_f_est": fric_f_est,
+    #                     "abs_mass_err": abs(m_est - m_gt),
+    #                     "abs_mu_err": abs(mu_est - mu_gt) if not np.isnan(mu_gt) else np.nan,
+    #                     "abs_fric_f_err": abs(fric_f_est - fric_f_gt) if not np.isnan(fric_f_gt) else np.nan
+    #                 })
+    # else:
+    #     print(f"Warning: Offline data directory not found at {OFFLINE_DATA_DIR}. Skipping Real World Inference.")
 
-    df_runs = pd.DataFrame(all_runs)
-    if not df_runs.empty:
-        df_runs.to_csv(real_detailed_csv_path, index=False)
+    # df_runs = pd.DataFrame(all_runs)
+    # if not df_runs.empty:
+    #     df_runs.to_csv(real_detailed_csv_path, index=False)
 
-        df_sorted_mass = df_runs.sort_values(by=['domain', 'abs_mass_err'], ascending=True)
-        df_best_mass_runs = df_sorted_mass.groupby('domain').head(TOP_NUM).copy()
+    #     df_sorted_mass = df_runs.sort_values(by=['domain', 'abs_mass_err'], ascending=True)
+    #     df_best_mass_runs = df_sorted_mass.groupby('domain').head(TOP_NUM).copy()
 
-        df_sorted_mu = df_runs.sort_values(by=['domain', 'abs_mu_err'], ascending=True)
-        df_best_mu_runs = df_sorted_mu.groupby('domain').head(TOP_NUM).copy()
+    #     df_sorted_mu = df_runs.sort_values(by=['domain', 'abs_mu_err'], ascending=True)
+    #     df_best_mu_runs = df_sorted_mu.groupby('domain').head(TOP_NUM).copy()
 
-        df_sorted_fric = df_runs.sort_values(by=['domain', 'abs_fric_f_err'], ascending=True)
-        df_best_fric_runs = df_sorted_fric.groupby('domain').head(TOP_NUM).copy()
+    #     df_sorted_fric = df_runs.sort_values(by=['domain', 'abs_fric_f_err'], ascending=True)
+    #     df_best_fric_runs = df_sorted_fric.groupby('domain').head(TOP_NUM).copy()
 
-        with open(real_eval_csv_path, mode='w', newline='') as f:
-            fieldnames = [
-                "domain",
-                "mass_mean_err", "mass_mean_err_pct", "mass_nmae_pct", "mass_nrmse_pct", "mass_smape_pct", "mass_std_dev", "mass_est_std_dev", "mass_std_pct",
-                "mu_mean_err", "mu_mean_err_pct", "mu_nmae_pct", "mu_nrmse_pct", "mu_smape_pct", "mu_std_dev", "mu_est_std_dev", "mu_std_pct",
-                "fric_f_mean_err", "fric_f_mean_err_pct", "fric_f_nmae_pct", "fric_f_nrmse_pct", "fric_f_smape_pct", "fric_f_std_dev", "fric_f_est_std_dev", "fric_f_std_pct",
+    #     with open(real_eval_csv_path, mode='w', newline='') as f:
+    #         fieldnames = [
+    #             "domain",
+    #             "mass_mean_err", "mass_mean_err_pct", "mass_nmae_pct", "mass_nrmse_pct", "mass_smape_pct", "mass_std_dev", "mass_est_std_dev", "mass_std_pct",
+    #             "mu_mean_err", "mu_mean_err_pct", "mu_nmae_pct", "mu_nrmse_pct", "mu_smape_pct", "mu_std_dev", "mu_est_std_dev", "mu_std_pct",
+    #             "fric_f_mean_err", "fric_f_mean_err_pct", "fric_f_nmae_pct", "fric_f_nrmse_pct", "fric_f_smape_pct", "fric_f_std_dev", "fric_f_est_std_dev", "fric_f_std_pct",
 
-                "mass_mean_err_pct_real_range", "mass_nmae_pct_real_range", "mass_nrmse_pct_real_range", "mass_std_pct_real_range",
-                "mu_mean_err_pct_real_range", "mu_nmae_pct_real_range", "mu_nrmse_pct_real_range", "mu_std_pct_real_range",
-                "fric_f_mean_err_pct_real_range", "fric_f_nmae_pct_real_range", "fric_f_nrmse_pct_real_range", "fric_f_std_pct_real_range",
+    #             "mass_mean_err_pct_real_range", "mass_nmae_pct_real_range", "mass_nrmse_pct_real_range", "mass_std_pct_real_range",
+    #             "mu_mean_err_pct_real_range", "mu_nmae_pct_real_range", "mu_nrmse_pct_real_range", "mu_std_pct_real_range",
+    #             "fric_f_mean_err_pct_real_range", "fric_f_nmae_pct_real_range", "fric_f_nrmse_pct_real_range", "fric_f_std_pct_real_range",
 
-                "best_mass_mean_err", "best_mass_mean_err_pct", "best_mass_nmae_pct", "best_mass_nrmse_pct", "best_mass_smape_pct", "best_mass_std_dev", "best_mass_est_std_dev", "best_mass_est_raw",
-                "best_mu_mean_err", "best_mu_mean_err_pct", "best_mu_nmae_pct", "best_mu_nrmse_pct", "best_mu_smape_pct", "best_mu_std_dev", "best_mu_est_std_dev", "best_mu_est_raw",
-                "best_fric_f_mean_err", "best_fric_f_mean_err_pct", "best_fric_f_nmae_pct", "best_fric_f_nrmse_pct", "best_fric_f_smape_pct", "best_fric_f_std_dev", "best_fric_f_est_std_dev", "best_fric_f_est_raw",
+    #             "best_mass_mean_err", "best_mass_mean_err_pct", "best_mass_nmae_pct", "best_mass_nrmse_pct", "best_mass_smape_pct", "best_mass_std_dev", "best_mass_est_std_dev", "best_mass_est_raw",
+    #             "best_mu_mean_err", "best_mu_mean_err_pct", "best_mu_nmae_pct", "best_mu_nrmse_pct", "best_mu_smape_pct", "best_mu_std_dev", "best_mu_est_std_dev", "best_mu_est_raw",
+    #             "best_fric_f_mean_err", "best_fric_f_mean_err_pct", "best_fric_f_nmae_pct", "best_fric_f_nrmse_pct", "best_fric_f_smape_pct", "best_fric_f_std_dev", "best_fric_f_est_std_dev", "best_fric_f_est_raw",
 
-                "best_mass_nmae_pct_real_range", "best_mass_nrmse_pct_real_range",
-                "best_mu_nmae_pct_real_range", "best_mu_nrmse_pct_real_range",
-                "best_fric_f_nmae_pct_real_range", "best_fric_f_nrmse_pct_real_range"
-            ]
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
+    #             "best_mass_nmae_pct_real_range", "best_mass_nrmse_pct_real_range",
+    #             "best_mu_nmae_pct_real_range", "best_mu_nrmse_pct_real_range",
+    #             "best_fric_f_nmae_pct_real_range", "best_fric_f_nrmse_pct_real_range"
+    #         ]
+    #         writer = csv.DictWriter(f, fieldnames=fieldnames)
+    #         writer.writeheader()
 
-            domains = df_runs['domain'].unique()
+    #         domains = df_runs['domain'].unique()
 
-            for dom in domains:
-                dom_data_all = df_runs[df_runs['domain'] == dom]
-                m_gt_all, m_est_all = dom_data_all['m_gt'].values, dom_data_all['m_est'].values
-                mu_gt_all, mu_est_all = dom_data_all['mu_gt'].values, dom_data_all['mu_est'].values
-                f_gt_all, f_est_all = dom_data_all['fric_f_gt'].values, dom_data_all['fric_f_est'].values
+    #         for dom in domains:
+    #             dom_data_all = df_runs[df_runs['domain'] == dom]
+    #             m_gt_all, m_est_all = dom_data_all['m_gt'].values, dom_data_all['m_est'].values
+    #             mu_gt_all, mu_est_all = dom_data_all['mu_gt'].values, dom_data_all['mu_est'].values
+    #             f_gt_all, f_est_all = dom_data_all['fric_f_gt'].values, dom_data_all['fric_f_est'].values
 
-                dom_data_best_mass = df_best_mass_runs[df_best_mass_runs['domain'] == dom]
-                m_gt_best, m_est_best = dom_data_best_mass['m_gt'].values, dom_data_best_mass['m_est'].values
+    #             dom_data_best_mass = df_best_mass_runs[df_best_mass_runs['domain'] == dom]
+    #             m_gt_best, m_est_best = dom_data_best_mass['m_gt'].values, dom_data_best_mass['m_est'].values
 
-                dom_data_best_mu = df_best_mu_runs[df_best_mu_runs['domain'] == dom]
-                mu_gt_best, mu_est_best = dom_data_best_mu['mu_gt'].values, dom_data_best_mu['mu_est'].values
+    #             dom_data_best_mu = df_best_mu_runs[df_best_mu_runs['domain'] == dom]
+    #             mu_gt_best, mu_est_best = dom_data_best_mu['mu_gt'].values, dom_data_best_mu['mu_est'].values
 
-                dom_data_best_fric = df_best_fric_runs[df_best_fric_runs['domain'] == dom]
-                f_gt_best, f_est_best = dom_data_best_fric['fric_f_gt'].values, dom_data_best_fric['fric_f_est'].values
+    #             dom_data_best_fric = df_best_fric_runs[df_best_fric_runs['domain'] == dom]
+    #             f_gt_best, f_est_best = dom_data_best_fric['fric_f_gt'].values, dom_data_best_fric['fric_f_est'].values
 
-                m_stats_avg_global = calculate_metrics(m_gt_all, m_est_all, GLOBAL_M_RANGE)
-                m_stats_avg_real = calculate_metrics(m_gt_all, m_est_all, REAL_M_RANGE)
-                m_stats_best_global = calculate_metrics(m_gt_best, m_est_best, GLOBAL_M_RANGE)
-                m_stats_best_real = calculate_metrics(m_gt_best, m_est_best, REAL_M_RANGE)
+    #             m_stats_avg_global = calculate_metrics(m_gt_all, m_est_all, GLOBAL_M_RANGE)
+    #             m_stats_avg_real = calculate_metrics(m_gt_all, m_est_all, REAL_M_RANGE)
+    #             m_stats_best_global = calculate_metrics(m_gt_best, m_est_best, GLOBAL_M_RANGE)
+    #             m_stats_best_real = calculate_metrics(m_gt_best, m_est_best, REAL_M_RANGE)
 
-                empty_stats = {"mean_err": np.nan, "mean_err_pct": np.nan, "nmae_pct": np.nan, "nrmse_pct": np.nan, "smape_pct": np.nan, "std_dev": np.nan, "std_pct": np.nan, "est_std_dev": np.nan}
+    #             empty_stats = {"mean_err": np.nan, "mean_err_pct": np.nan, "nmae_pct": np.nan, "nrmse_pct": np.nan, "smape_pct": np.nan, "std_dev": np.nan, "std_pct": np.nan, "est_std_dev": np.nan}
 
-                if not np.isnan(mu_gt_all).all():
-                    mu_stats_avg_global = calculate_metrics(mu_gt_all, mu_est_all, GLOBAL_MU_RANGE)
-                    mu_stats_avg_real = calculate_metrics(mu_gt_all, mu_est_all, REAL_MU_RANGE)
-                    mu_stats_best_global = calculate_metrics(mu_gt_best, mu_est_best, GLOBAL_MU_RANGE)
-                    mu_stats_best_real = calculate_metrics(mu_gt_best, mu_est_best, REAL_MU_RANGE)
+    #             if not np.isnan(mu_gt_all).all():
+    #                 mu_stats_avg_global = calculate_metrics(mu_gt_all, mu_est_all, GLOBAL_MU_RANGE)
+    #                 mu_stats_avg_real = calculate_metrics(mu_gt_all, mu_est_all, REAL_MU_RANGE)
+    #                 mu_stats_best_global = calculate_metrics(mu_gt_best, mu_est_best, GLOBAL_MU_RANGE)
+    #                 mu_stats_best_real = calculate_metrics(mu_gt_best, mu_est_best, REAL_MU_RANGE)
 
-                    f_stats_avg_global = calculate_metrics(f_gt_all, f_est_all, GLOBAL_FRIC_RANGE)
-                    f_stats_avg_real = calculate_metrics(f_gt_all, f_est_all, REAL_FRIC_RANGE)
-                    f_stats_best_global = calculate_metrics(f_gt_best, f_est_best, GLOBAL_FRIC_RANGE)
-                    f_stats_best_real = calculate_metrics(f_gt_best, f_est_best, REAL_FRIC_RANGE)
-                else:
-                    mu_stats_avg_global = mu_stats_avg_real = mu_stats_best_global = mu_stats_best_real = empty_stats
-                    f_stats_avg_global = f_stats_avg_real = f_stats_best_global = f_stats_best_real = empty_stats
+    #                 f_stats_avg_global = calculate_metrics(f_gt_all, f_est_all, GLOBAL_FRIC_RANGE)
+    #                 f_stats_avg_real = calculate_metrics(f_gt_all, f_est_all, REAL_FRIC_RANGE)
+    #                 f_stats_best_global = calculate_metrics(f_gt_best, f_est_best, GLOBAL_FRIC_RANGE)
+    #                 f_stats_best_real = calculate_metrics(f_gt_best, f_est_best, REAL_FRIC_RANGE)
+    #             else:
+    #                 mu_stats_avg_global = mu_stats_avg_real = mu_stats_best_global = mu_stats_best_real = empty_stats
+    #                 f_stats_avg_global = f_stats_avg_real = f_stats_best_global = f_stats_best_real = empty_stats
 
-                writer.writerow({
-                    "domain": dom,
-                    "mass_mean_err": round(m_stats_avg_global["mean_err"], 4),
-                    "mass_mean_err_pct": round(m_stats_avg_global["mean_err_pct"], 2),
-                    "mass_nmae_pct": round(m_stats_avg_global["nmae_pct"], 2),
-                    "mass_nrmse_pct": round(m_stats_avg_global["nrmse_pct"], 2),
-                    "mass_smape_pct": round(m_stats_avg_global["smape_pct"], 2),
-                    "mass_std_dev": round(m_stats_avg_global["std_dev"], 4),
-                    "mass_est_std_dev": round(m_stats_avg_global["est_std_dev"], 4),
-                    "mass_std_pct": round(m_stats_avg_global["std_pct"], 2),
+    #             writer.writerow({
+    #                 "domain": dom,
+    #                 "mass_mean_err": round(m_stats_avg_global["mean_err"], 4),
+    #                 "mass_mean_err_pct": round(m_stats_avg_global["mean_err_pct"], 2),
+    #                 "mass_nmae_pct": round(m_stats_avg_global["nmae_pct"], 2),
+    #                 "mass_nrmse_pct": round(m_stats_avg_global["nrmse_pct"], 2),
+    #                 "mass_smape_pct": round(m_stats_avg_global["smape_pct"], 2),
+    #                 "mass_std_dev": round(m_stats_avg_global["std_dev"], 4),
+    #                 "mass_est_std_dev": round(m_stats_avg_global["est_std_dev"], 4),
+    #                 "mass_std_pct": round(m_stats_avg_global["std_pct"], 2),
 
-                    "mu_mean_err": round(mu_stats_avg_global["mean_err"], 4) if not np.isnan(mu_stats_avg_global["mean_err"]) else "NaN",
-                    "mu_mean_err_pct": round(mu_stats_avg_global["mean_err_pct"], 2) if not np.isnan(mu_stats_avg_global["mean_err_pct"]) else "NaN",
-                    "mu_nmae_pct": round(mu_stats_avg_global["nmae_pct"], 2) if not np.isnan(mu_stats_avg_global["nmae_pct"]) else "NaN",
-                    "mu_nrmse_pct": round(mu_stats_avg_global["nrmse_pct"], 2) if not np.isnan(mu_stats_avg_global["nrmse_pct"]) else "NaN",
-                    "mu_smape_pct": round(mu_stats_avg_global["smape_pct"], 2) if not np.isnan(mu_stats_avg_global["smape_pct"]) else "NaN",
-                    "mu_std_dev": round(mu_stats_avg_global["std_dev"], 4) if not np.isnan(mu_stats_avg_global["std_dev"]) else "NaN",
-                    "mu_est_std_dev": round(mu_stats_avg_global["est_std_dev"], 4) if not np.isnan(mu_stats_avg_global["est_std_dev"]) else "NaN",
-                    "mu_std_pct": round(mu_stats_avg_global["std_pct"], 2) if not np.isnan(mu_stats_avg_global["std_pct"]) else "NaN",
+    #                 "mu_mean_err": round(mu_stats_avg_global["mean_err"], 4) if not np.isnan(mu_stats_avg_global["mean_err"]) else "NaN",
+    #                 "mu_mean_err_pct": round(mu_stats_avg_global["mean_err_pct"], 2) if not np.isnan(mu_stats_avg_global["mean_err_pct"]) else "NaN",
+    #                 "mu_nmae_pct": round(mu_stats_avg_global["nmae_pct"], 2) if not np.isnan(mu_stats_avg_global["nmae_pct"]) else "NaN",
+    #                 "mu_nrmse_pct": round(mu_stats_avg_global["nrmse_pct"], 2) if not np.isnan(mu_stats_avg_global["nrmse_pct"]) else "NaN",
+    #                 "mu_smape_pct": round(mu_stats_avg_global["smape_pct"], 2) if not np.isnan(mu_stats_avg_global["smape_pct"]) else "NaN",
+    #                 "mu_std_dev": round(mu_stats_avg_global["std_dev"], 4) if not np.isnan(mu_stats_avg_global["std_dev"]) else "NaN",
+    #                 "mu_est_std_dev": round(mu_stats_avg_global["est_std_dev"], 4) if not np.isnan(mu_stats_avg_global["est_std_dev"]) else "NaN",
+    #                 "mu_std_pct": round(mu_stats_avg_global["std_pct"], 2) if not np.isnan(mu_stats_avg_global["std_pct"]) else "NaN",
 
-                    "fric_f_mean_err": round(f_stats_avg_global["mean_err"], 4) if not np.isnan(f_stats_avg_global["mean_err"]) else "NaN",
-                    "fric_f_mean_err_pct": round(f_stats_avg_global["mean_err_pct"], 2) if not np.isnan(f_stats_avg_global["mean_err_pct"]) else "NaN",
-                    "fric_f_nmae_pct": round(f_stats_avg_global["nmae_pct"], 2) if not np.isnan(f_stats_avg_global["nmae_pct"]) else "NaN",
-                    "fric_f_nrmse_pct": round(f_stats_avg_global["nrmse_pct"], 2) if not np.isnan(f_stats_avg_global["nrmse_pct"]) else "NaN",
-                    "fric_f_smape_pct": round(f_stats_avg_global["smape_pct"], 2) if not np.isnan(f_stats_avg_global["smape_pct"]) else "NaN",
-                    "fric_f_std_dev": round(f_stats_avg_global["std_dev"], 4) if not np.isnan(f_stats_avg_global["std_dev"]) else "NaN",
-                    "fric_f_est_std_dev": round(f_stats_avg_global["est_std_dev"], 4) if not np.isnan(f_stats_avg_global["est_std_dev"]) else "NaN",
-                    "fric_f_std_pct": round(f_stats_avg_global["std_pct"], 2) if not np.isnan(f_stats_avg_global["std_pct"]) else "NaN",
+    #                 "fric_f_mean_err": round(f_stats_avg_global["mean_err"], 4) if not np.isnan(f_stats_avg_global["mean_err"]) else "NaN",
+    #                 "fric_f_mean_err_pct": round(f_stats_avg_global["mean_err_pct"], 2) if not np.isnan(f_stats_avg_global["mean_err_pct"]) else "NaN",
+    #                 "fric_f_nmae_pct": round(f_stats_avg_global["nmae_pct"], 2) if not np.isnan(f_stats_avg_global["nmae_pct"]) else "NaN",
+    #                 "fric_f_nrmse_pct": round(f_stats_avg_global["nrmse_pct"], 2) if not np.isnan(f_stats_avg_global["nrmse_pct"]) else "NaN",
+    #                 "fric_f_smape_pct": round(f_stats_avg_global["smape_pct"], 2) if not np.isnan(f_stats_avg_global["smape_pct"]) else "NaN",
+    #                 "fric_f_std_dev": round(f_stats_avg_global["std_dev"], 4) if not np.isnan(f_stats_avg_global["std_dev"]) else "NaN",
+    #                 "fric_f_est_std_dev": round(f_stats_avg_global["est_std_dev"], 4) if not np.isnan(f_stats_avg_global["est_std_dev"]) else "NaN",
+    #                 "fric_f_std_pct": round(f_stats_avg_global["std_pct"], 2) if not np.isnan(f_stats_avg_global["std_pct"]) else "NaN",
 
-                    "mass_mean_err_pct_real_range": round(m_stats_avg_real["mean_err_pct"], 2),
-                    "mass_nmae_pct_real_range": round(m_stats_avg_real["nmae_pct"], 2),
-                    "mass_nrmse_pct_real_range": round(m_stats_avg_real["nrmse_pct"], 2),
-                    "mass_std_pct_real_range": round(m_stats_avg_real["std_pct"], 2),
+    #                 "mass_mean_err_pct_real_range": round(m_stats_avg_real["mean_err_pct"], 2),
+    #                 "mass_nmae_pct_real_range": round(m_stats_avg_real["nmae_pct"], 2),
+    #                 "mass_nrmse_pct_real_range": round(m_stats_avg_real["nrmse_pct"], 2),
+    #                 "mass_std_pct_real_range": round(m_stats_avg_real["std_pct"], 2),
 
-                    "mu_mean_err_pct_real_range": round(mu_stats_avg_real["mean_err_pct"], 2) if not np.isnan(mu_stats_avg_real["mean_err_pct"]) else "NaN",
-                    "mu_nmae_pct_real_range": round(mu_stats_avg_real["nmae_pct"], 2) if not np.isnan(mu_stats_avg_real["nmae_pct"]) else "NaN",
-                    "mu_nrmse_pct_real_range": round(mu_stats_avg_real["nrmse_pct"], 2) if not np.isnan(mu_stats_avg_real["nrmse_pct"]) else "NaN",
-                    "mu_std_pct_real_range": round(mu_stats_avg_real["std_pct"], 2) if not np.isnan(mu_stats_avg_real["std_pct"]) else "NaN",
+    #                 "mu_mean_err_pct_real_range": round(mu_stats_avg_real["mean_err_pct"], 2) if not np.isnan(mu_stats_avg_real["mean_err_pct"]) else "NaN",
+    #                 "mu_nmae_pct_real_range": round(mu_stats_avg_real["nmae_pct"], 2) if not np.isnan(mu_stats_avg_real["nmae_pct"]) else "NaN",
+    #                 "mu_nrmse_pct_real_range": round(mu_stats_avg_real["nrmse_pct"], 2) if not np.isnan(mu_stats_avg_real["nrmse_pct"]) else "NaN",
+    #                 "mu_std_pct_real_range": round(mu_stats_avg_real["std_pct"], 2) if not np.isnan(mu_stats_avg_real["std_pct"]) else "NaN",
 
-                    "fric_f_mean_err_pct_real_range": round(f_stats_avg_real["mean_err_pct"], 2) if not np.isnan(f_stats_avg_real["mean_err_pct"]) else "NaN",
-                    "fric_f_nmae_pct_real_range": round(f_stats_avg_real["nmae_pct"], 2) if not np.isnan(f_stats_avg_real["nmae_pct"]) else "NaN",
-                    "fric_f_nrmse_pct_real_range": round(f_stats_avg_real["nrmse_pct"], 2) if not np.isnan(f_stats_avg_real["nrmse_pct"]) else "NaN",
-                    "fric_f_std_pct_real_range": round(f_stats_avg_real["std_pct"], 2) if not np.isnan(f_stats_avg_real["std_pct"]) else "NaN",
+    #                 "fric_f_mean_err_pct_real_range": round(f_stats_avg_real["mean_err_pct"], 2) if not np.isnan(f_stats_avg_real["mean_err_pct"]) else "NaN",
+    #                 "fric_f_nmae_pct_real_range": round(f_stats_avg_real["nmae_pct"], 2) if not np.isnan(f_stats_avg_real["nmae_pct"]) else "NaN",
+    #                 "fric_f_nrmse_pct_real_range": round(f_stats_avg_real["nrmse_pct"], 2) if not np.isnan(f_stats_avg_real["nrmse_pct"]) else "NaN",
+    #                 "fric_f_std_pct_real_range": round(f_stats_avg_real["std_pct"], 2) if not np.isnan(f_stats_avg_real["std_pct"]) else "NaN",
 
-                    "best_mass_mean_err": round(m_stats_best_global["mean_err"], 4),
-                    "best_mass_mean_err_pct": round(m_stats_best_global["mean_err_pct"], 2),
-                    "best_mass_nmae_pct": round(m_stats_best_global["nmae_pct"], 2),
-                    "best_mass_nrmse_pct": round(m_stats_best_global["nrmse_pct"], 2),
-                    "best_mass_smape_pct": round(m_stats_best_global["smape_pct"], 2),
-                    "best_mass_std_dev": round(m_stats_best_global["std_dev"], 4),
-                    "best_mass_est_std_dev": round(m_stats_best_global["est_std_dev"], 4),
-                    "best_mass_est_raw": round(np.mean(m_est_best), 4),
+    #                 "best_mass_mean_err": round(m_stats_best_global["mean_err"], 4),
+    #                 "best_mass_mean_err_pct": round(m_stats_best_global["mean_err_pct"], 2),
+    #                 "best_mass_nmae_pct": round(m_stats_best_global["nmae_pct"], 2),
+    #                 "best_mass_nrmse_pct": round(m_stats_best_global["nrmse_pct"], 2),
+    #                 "best_mass_smape_pct": round(m_stats_best_global["smape_pct"], 2),
+    #                 "best_mass_std_dev": round(m_stats_best_global["std_dev"], 4),
+    #                 "best_mass_est_std_dev": round(m_stats_best_global["est_std_dev"], 4),
+    #                 "best_mass_est_raw": round(np.mean(m_est_best), 4),
 
-                    "best_mu_mean_err": round(mu_stats_best_global["mean_err"], 4) if not np.isnan(mu_stats_best_global["mean_err"]) else "NaN",
-                    "best_mu_mean_err_pct": round(mu_stats_best_global["mean_err_pct"], 2) if not np.isnan(mu_stats_best_global["mean_err_pct"]) else "NaN",
-                    "best_mu_nmae_pct": round(mu_stats_best_global["nmae_pct"], 2) if not np.isnan(mu_stats_best_global["nmae_pct"]) else "NaN",
-                    "best_mu_nrmse_pct": round(mu_stats_best_global["nrmse_pct"], 2) if not np.isnan(mu_stats_best_global["nrmse_pct"]) else "NaN",
-                    "best_mu_smape_pct": round(mu_stats_best_global["smape_pct"], 2) if not np.isnan(mu_stats_best_global["smape_pct"]) else "NaN",
-                    "best_mu_std_dev": round(mu_stats_best_global["std_dev"], 4) if not np.isnan(mu_stats_best_global["std_dev"]) else "NaN",
-                    "best_mu_est_std_dev": round(mu_stats_best_global["est_std_dev"], 4) if not np.isnan(mu_stats_best_global["est_std_dev"]) else "NaN",
-                    "best_mu_est_raw": round(np.mean(mu_est_best), 4) if len(mu_est_best) > 0 and not np.isnan(mu_est_best).all() else "NaN",
+    #                 "best_mu_mean_err": round(mu_stats_best_global["mean_err"], 4) if not np.isnan(mu_stats_best_global["mean_err"]) else "NaN",
+    #                 "best_mu_mean_err_pct": round(mu_stats_best_global["mean_err_pct"], 2) if not np.isnan(mu_stats_best_global["mean_err_pct"]) else "NaN",
+    #                 "best_mu_nmae_pct": round(mu_stats_best_global["nmae_pct"], 2) if not np.isnan(mu_stats_best_global["nmae_pct"]) else "NaN",
+    #                 "best_mu_nrmse_pct": round(mu_stats_best_global["nrmse_pct"], 2) if not np.isnan(mu_stats_best_global["nrmse_pct"]) else "NaN",
+    #                 "best_mu_smape_pct": round(mu_stats_best_global["smape_pct"], 2) if not np.isnan(mu_stats_best_global["smape_pct"]) else "NaN",
+    #                 "best_mu_std_dev": round(mu_stats_best_global["std_dev"], 4) if not np.isnan(mu_stats_best_global["std_dev"]) else "NaN",
+    #                 "best_mu_est_std_dev": round(mu_stats_best_global["est_std_dev"], 4) if not np.isnan(mu_stats_best_global["est_std_dev"]) else "NaN",
+    #                 "best_mu_est_raw": round(np.mean(mu_est_best), 4) if len(mu_est_best) > 0 and not np.isnan(mu_est_best).all() else "NaN",
 
-                    "best_fric_f_mean_err": round(f_stats_best_global["mean_err"], 4) if not np.isnan(f_stats_best_global["mean_err"]) else "NaN",
-                    "best_fric_f_mean_err_pct": round(f_stats_best_global["mean_err_pct"], 2) if not np.isnan(f_stats_best_global["mean_err_pct"]) else "NaN",
-                    "best_fric_f_nmae_pct": round(f_stats_best_global["nmae_pct"], 2) if not np.isnan(f_stats_best_global["nmae_pct"]) else "NaN",
-                    "best_fric_f_nrmse_pct": round(f_stats_best_global["nrmse_pct"], 2) if not np.isnan(f_stats_best_global["nrmse_pct"]) else "NaN",
-                    "best_fric_f_smape_pct": round(f_stats_best_global["smape_pct"], 2) if not np.isnan(f_stats_best_global["smape_pct"]) else "NaN",
-                    "best_fric_f_std_dev": round(f_stats_best_global["std_dev"], 4) if not np.isnan(f_stats_best_global["std_dev"]) else "NaN",
-                    "best_fric_f_est_std_dev": round(f_stats_best_global["est_std_dev"], 4) if not np.isnan(f_stats_best_global["est_std_dev"]) else "NaN",
-                    "best_fric_f_est_raw": round(np.mean(f_est_best), 4) if len(f_est_best) > 0 and not np.isnan(f_est_best).all() else "NaN",
+    #                 "best_fric_f_mean_err": round(f_stats_best_global["mean_err"], 4) if not np.isnan(f_stats_best_global["mean_err"]) else "NaN",
+    #                 "best_fric_f_mean_err_pct": round(f_stats_best_global["mean_err_pct"], 2) if not np.isnan(f_stats_best_global["mean_err_pct"]) else "NaN",
+    #                 "best_fric_f_nmae_pct": round(f_stats_best_global["nmae_pct"], 2) if not np.isnan(f_stats_best_global["nmae_pct"]) else "NaN",
+    #                 "best_fric_f_nrmse_pct": round(f_stats_best_global["nrmse_pct"], 2) if not np.isnan(f_stats_best_global["nrmse_pct"]) else "NaN",
+    #                 "best_fric_f_smape_pct": round(f_stats_best_global["smape_pct"], 2) if not np.isnan(f_stats_best_global["smape_pct"]) else "NaN",
+    #                 "best_fric_f_std_dev": round(f_stats_best_global["std_dev"], 4) if not np.isnan(f_stats_best_global["std_dev"]) else "NaN",
+    #                 "best_fric_f_est_std_dev": round(f_stats_best_global["est_std_dev"], 4) if not np.isnan(f_stats_best_global["est_std_dev"]) else "NaN",
+    #                 "best_fric_f_est_raw": round(np.mean(f_est_best), 4) if len(f_est_best) > 0 and not np.isnan(f_est_best).all() else "NaN",
 
-                    "best_mass_nmae_pct_real_range": round(m_stats_best_real["nmae_pct"], 2),
-                    "best_mass_nrmse_pct_real_range": round(m_stats_best_real["nrmse_pct"], 2),
-                    "best_mu_nmae_pct_real_range": round(mu_stats_best_real["nmae_pct"], 2) if not np.isnan(mu_stats_best_real["nmae_pct"]) else "NaN",
-                    "best_mu_nrmse_pct_real_range": round(mu_stats_best_real["nrmse_pct"], 2) if not np.isnan(mu_stats_best_real["nrmse_pct"]) else "NaN",
-                    "best_fric_f_nmae_pct_real_range": round(f_stats_best_real["nmae_pct"], 2) if not np.isnan(f_stats_best_real["nmae_pct"]) else "NaN",
-                    "best_fric_f_nrmse_pct_real_range": round(f_stats_best_real["nrmse_pct"], 2) if not np.isnan(f_stats_best_real["nrmse_pct"]) else "NaN"
-                })
+    #                 "best_mass_nmae_pct_real_range": round(m_stats_best_real["nmae_pct"], 2),
+    #                 "best_mass_nrmse_pct_real_range": round(m_stats_best_real["nrmse_pct"], 2),
+    #                 "best_mu_nmae_pct_real_range": round(mu_stats_best_real["nmae_pct"], 2) if not np.isnan(mu_stats_best_real["nmae_pct"]) else "NaN",
+    #                 "best_mu_nrmse_pct_real_range": round(mu_stats_best_real["nrmse_pct"], 2) if not np.isnan(mu_stats_best_real["nrmse_pct"]) else "NaN",
+    #                 "best_fric_f_nmae_pct_real_range": round(f_stats_best_real["nmae_pct"], 2) if not np.isnan(f_stats_best_real["nmae_pct"]) else "NaN",
+    #                 "best_fric_f_nrmse_pct_real_range": round(f_stats_best_real["nrmse_pct"], 2) if not np.isnan(f_stats_best_real["nrmse_pct"]) else "NaN"
+    #             })
 
-        print(f"Real-world aggregated summary (with Friction Force & Raw Estimates) saved to: {real_eval_csv_path}")
+    #     print(f"Real-world aggregated summary (with Friction Force & Raw Estimates) saved to: {real_eval_csv_path}")
 
-        fig, ax = plt.subplots(figsize=(9, 8))
+    #     fig, ax = plt.subplots(figsize=(9, 8))
 
-        sc = ax.scatter(df_runs['m_gt'], df_runs['m_est'],
-                        c=np.abs(df_runs['m_est'] - df_runs['m_gt']),
-                        cmap='viridis', vmin=0, vmax=0.5, s=40, alpha=0.5, label='All Runs')
+    #     sc = ax.scatter(df_runs['m_gt'], df_runs['m_est'],
+    #                     c=np.abs(df_runs['m_est'] - df_runs['m_gt']),
+    #                     cmap='viridis', vmin=0, vmax=0.5, s=40, alpha=0.5, label='All Runs')
 
-        ax.scatter(df_best_mass_runs['m_gt'], df_best_mass_runs['m_est'],
-                   edgecolors='red', facecolors='none', linewidths=1.5, s=90, label=f'Top {TOP_NUM} Runs (Mass)')
+    #     ax.scatter(df_best_mass_runs['m_gt'], df_best_mass_runs['m_est'],
+    #                edgecolors='red', facecolors='none', linewidths=1.5, s=90, label=f'Top {TOP_NUM} Runs (Mass)')
 
-        plt.colorbar(sc, ax=ax).set_label('Absolute Error [kg]')
+    #     plt.colorbar(sc, ax=ax).set_label('Absolute Error [kg]')
 
-        min_val = min(df_runs['m_gt'].min(), df_runs['m_est'].min())
-        max_val = max(df_runs['m_gt'].max(), df_runs['m_est'].max())
-        ax.plot([min_val, max_val], [min_val, max_val], 'r--', label='Perfect Estimation')
+    #     min_val = min(df_runs['m_gt'].min(), df_runs['m_est'].min())
+    #     max_val = max(df_runs['m_gt'].max(), df_runs['m_est'].max())
+    #     ax.plot([min_val, max_val], [min_val, max_val], 'r--', label='Perfect Estimation')
 
-        ax.set_xlabel('Ground Truth Mass (kg)')
-        ax.set_ylabel('Estimated Mass (kg)')
+    #     ax.set_xlabel('Ground Truth Mass (kg)')
+    #     ax.set_ylabel('Estimated Mass (kg)')
 
-        global_avg_m_stats = calculate_metrics(df_runs['m_gt'].values, df_runs['m_est'].values, GLOBAL_M_RANGE)
-        global_best_m_stats = calculate_metrics(df_best_mass_runs['m_gt'].values, df_best_mass_runs['m_est'].values, GLOBAL_M_RANGE)
+    #     global_avg_m_stats = calculate_metrics(df_runs['m_gt'].values, df_runs['m_est'].values, GLOBAL_M_RANGE)
+    #     global_best_m_stats = calculate_metrics(df_best_mass_runs['m_gt'].values, df_best_mass_runs['m_est'].values, GLOBAL_M_RANGE)
 
-        ax.set_title(f"Real-World Mass Estimation\n"
-                     f"AVERAGE (All pushes) - Mean Err: {global_avg_m_stats['mean_err']:+.4f} kg | nMAE: {global_avg_m_stats['nmae_pct']:.2f}% | STD: +/-{global_avg_m_stats['std_pct']:.2f}%\n"
-                     f"BEST {TOP_NUM} PUSHES - Mean Err: {global_best_m_stats['mean_err']:+.4f} kg | nMAE: {global_best_m_stats['nmae_pct']:.2f}%")
+    #     ax.set_title(f"Real-World Mass Estimation\n"
+    #                  f"AVERAGE (All pushes) - Mean Err: {global_avg_m_stats['mean_err']:+.4f} kg | nMAE: {global_avg_m_stats['nmae_pct']:.2f}% | STD: +/-{global_avg_m_stats['std_pct']:.2f}%\n"
+    #                  f"BEST {TOP_NUM} PUSHES - Mean Err: {global_best_m_stats['mean_err']:+.4f} kg | nMAE: {global_best_m_stats['nmae_pct']:.2f}%")
 
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+    #     ax.legend()
+    #     ax.grid(True, alpha=0.3)
 
-        plot_path = os.path.join(EVAL_CHECKPOINT_DIR, "exp1_real_world_mass_accuracy.png")
-        plt.savefig(plot_path, dpi=150)
-        print(f"Real-world plot saved to: {plot_path}")
+    #     plot_path = os.path.join(EVAL_CHECKPOINT_DIR, "exp1_real_world_mass_accuracy.png")
+    #     plt.savefig(plot_path, dpi=150)
+    #     print(f"Real-world plot saved to: {plot_path}")
 
-        if PLOT_SHOW:
-            plt.show()
-        plt.close(fig)
-    else:
-        print("No valid 60-step real-world data found to process.")
+    #     if PLOT_SHOW:
+    #         plt.show()
+    #     plt.close(fig)
+    # else:
+    #     print("No valid 60-step real-world data found to process.")
 
 if __name__ == "__main__":
     main()
