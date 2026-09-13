@@ -252,11 +252,15 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0,
     ]
 
     df['domain'] = np.select(conditions, choices, default='other')
-    df_filtered = df[df['domain'] == 'm_seen_mu_seen'].copy()
 
+    # Push-quality filter on the FULL frame, before anything splits off it, so the
+    # OOD domains evaluate.py selects are filtered the same way the seen domain is.
     have_arm = False
     if MULTI_ANGLE:
         have_arm = _report_column_availability(df)
+        df = _apply_push_quality_filter(df)
+
+    df_filtered = df[df['domain'] == 'm_seen_mu_seen'].copy()
 
     acc_cols = sorted([c for c in df_filtered.columns if "input_acc_" in c], key=lambda x: int(x.split('_')[-1]))
     vel_cols = sorted([c for c in df_filtered.columns if "input_vel_" in c], key=lambda x: int(x.split('_')[-1]))
@@ -264,11 +268,23 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0,
     num_axes = 1
     seq_len = len(acc_cols) // num_axes
 
+    # The window must fit inside the 100-step recording. This applies ONLY to
+    # df_filtered, which the physics loop below iterates -- the returned `df` keeps
+    # every row because evaluate.py re-applies this filter itself when selecting
+    # each domain.
     valid_mask = (df_filtered['start_t'] + seq_len) <= 100
     df_filtered = df_filtered[valid_mask].copy()
 
-    if MULTI_ANGLE:
-        df_filtered = _apply_push_quality_filter(df_filtered)
+    # Guard: the physics loop indexes pinn_*_t{start_t + seq_len - 1}_*, so a row
+    # that survives with start_t + seq_len > 100 raises a KeyError deep in the loop
+    # rather than here.
+    _max_t = int((df_filtered['start_t'] + seq_len).max()) if len(df_filtered) else 0
+    assert _max_t <= 100, (
+        f"{(df_filtered['start_t'] + seq_len > 100).sum()} rows have "
+        f"start_t + seq_len = {_max_t} > 100. The window filter was not applied to "
+        f"the frame the physics loop iterates.")
+    print(f"[FILTER] window (start_t + {seq_len} <= 100): {len(df_filtered)} rows kept")
+
 
     X_acc_flat = df_filtered[acc_cols].values.astype(np.float32)
     X_vel_flat = df_filtered[vel_cols].values.astype(np.float32)
@@ -439,4 +455,8 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0,
                               worker_init_fn=lambda worker_id: np.random.seed(42 + worker_id), generator=g)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-    return train_loader, val_loader, seq_len, df_filtered, choices
+    # Return the FULL frame, not df_filtered. evaluate.py selects OOD domains
+    # (m_over, mu_under, ...) off the 'domain' column, and those rows exist only
+    # here -- df_filtered is the m_seen_mu_seen cell alone. Returning the filtered
+    # frame silently drops every unseen domain from the evaluation summary.
+    return train_loader, val_loader, seq_len, df, choices

@@ -79,10 +79,10 @@ MULTI_ANGLE = True
 # same slice of time as the velocity input, so they are comparable.
 # =============================================================================
 # INPUT_VARIANT = "vel_manip_cond"
-INPUT_VARIANT = "vel_dirmanip_cond"
+# INPUT_VARIANT = "vel_dirmanip_cond"
 # INPUT_VARIANT = "vel_manip_seq"
 # INPUT_VARIANT = "vel_dirmanip_seq"
-# INPUT_VARIANT = "vel_only"
+INPUT_VARIANT = "vel_only"
 
 _VARIANTS = ("vel_only", "vel_manip_cond", "vel_dirmanip_cond",
              "vel_manip_seq", "vel_dirmanip_seq")
