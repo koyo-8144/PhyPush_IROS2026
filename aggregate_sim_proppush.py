@@ -41,47 +41,64 @@ MODELS_TO_COMPARE = {
     #             "draw_thick_line": "No",
     #     },
 
+    # ---------------------------------- Baselines ----------------------------------
     r"MORF~\cite{mavrakis_estimating_2020}": {
-                "path": f"/home/psxkf4/PhyPush/results/checkpoints/baseline_random_forest/{csv_file}",
-                "force_input": "Yes",
-                "draw_thick_line": "No",
-        },
-    r"PhyPush~\cite{}": {
+            "path": f"/home/psxkf4/PhyPush/results/checkpoints/baseline_random_forest/{csv_file}",
+            "force_input": "Yes",
+            "draw_thick_line": "No",
+    },
+    r"PhyPush EE vel seq input only~\cite{}": {
             "path": os.path.join(BASE_RUN_DIR, "20260913_134633", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
             "force_input": "No",
             "draw_thick_line": "Yes",
-        },
-
+    },
+    # ---------------------------------- PhyPush ----------------------------------
     r"PhyPush worst manip cond": {
             "path": os.path.join(BASE_RUN_DIR, "20260913_102210", f"pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond/{csv_file}"),
             "force_input": "No",
             "draw_thick_line": "No",
-        },
+    },
     r"PhyPush worst dir manip cond": {
-                "path": os.path.join(BASE_RUN_DIR, "20260913_110510", f"pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond/{csv_file}"),
-                "force_input": "No",
-                "draw_thick_line": "No",
-            },
+            "path": os.path.join(BASE_RUN_DIR, "20260913_110510", f"pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond/{csv_file}"),
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
     r"PhyPush manip seq input": {
-                "path": os.path.join(BASE_RUN_DIR, "20260913_120624", f"pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq/{csv_file}"),
-                "force_input": "No",
-                "draw_thick_line": "No",
-            },
+            "path": os.path.join(BASE_RUN_DIR, "20260913_120624", f"pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq/{csv_file}"),
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
     r"PhyPush dir manip seq input": {
-                "path": os.path.join(BASE_RUN_DIR, "20260913_124812", f"pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq/{csv_file}"),
-                "force_input": "No",
-                "draw_thick_line": "No",
-            },
-    # r"PropPush multi-angle arm-conditioned DDPM": {
-    #         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_20260816_153914_ddpm.csv",
-    #         "force_input": "No"
-    # },
-    r"PropPush arm-conditioned DDIM": {
-                "path": "",
-                "force_input": "No",
-                "draw_thick_line": "No",
-        },
-
+            "path": os.path.join(BASE_RUN_DIR, "20260913_124812", f"pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq/{csv_file}"),
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    # ---------------------------------- PropPush ----------------------------------
+    r"PropPush EE vel seq input only": {
+            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_only.csv",
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    r"PropPush worst manip cond": {
+            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_manip_cond.csv",
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    r"PropPush worst dir manip cond": {
+            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_dirmanip_cond.csv",
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    r"PropPush manip seq input": {
+            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_manip_seq.csv",
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    r"PropPush dir manip seq input": {
+            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_dirmanip_seq.csv",
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
 }
 
 # --- METRICS DEFINITIONS ---
