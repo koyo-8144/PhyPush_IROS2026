@@ -24,7 +24,8 @@ def main():
         print(f"Error: File not found at {CSV_PATH}")
         return
 
-    df = load_dataset_csv()
+    # Training uses only the seen (mass, mu) box; skip the rest while reading.
+    df = load_dataset_csv(seen_only=True)
     if 'gt_fric_force' in df.columns:
         df['gt_fric_force'] = df['gt_fric_force'].apply(clean_force_col)
     

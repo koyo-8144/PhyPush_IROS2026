@@ -252,10 +252,13 @@ def report_multi_angle_coverage(df):
             print(f"\n  {col}  ({vc.size} distinct values)")
             print(vc.to_string())
 
+    report_object_yaw(df)
+
     if {'obj_yaw_base', 'push_face_index'}.issubset(df.columns):
-        pivot = df.pivot_table(index='obj_yaw_base', columns='push_face_index',
-                               values='gt_mass', aggfunc='count')
-        print("\n  rows per (object yaw x push side):")
+        pivot = (df.assign(yaw_deg=_yaw_deg(df['obj_yaw_base']))
+            .pivot_table(index='yaw_deg', columns='push_face_index',
+                        values='gt_mass', aggfunc='count'))
+        print("\n  rows per (object yaw [deg] x push side):")
         print(pivot.to_string())
 
         counts = pivot.values.flatten()
@@ -267,6 +270,8 @@ def report_multi_angle_coverage(df):
                 print("  [NOTE] Some cells are far thinner than average. Likely IK "
                       "failures at those orientations, since _save_offline_data_csv "
                       "drops rows where push_start/end were not reached.")
+
+    breakpoint()
 
     if {'seed', 'env_id'}.issubset(df.columns):
         groups = df['seed'].astype(int) * 100000 + df['env_id'].astype(int)
@@ -1105,7 +1110,16 @@ def inspect_samples(df, num_samples=3):
         axes[0].legend(loc='upper left')
 
         print("\n" + "=" * 70)
-        print(f"SAMPLE {i}  |  gt_mass = {gt_mass:.4f} kg   gt_mu = {gt_mu:.4f}   yaw_base = {yaw_base:.4f} rad")
+        face = int(row['push_face_index']) if 'push_face_index' in row else -1
+        cidx = int(row['collect_idx']) if 'collect_idx' in row else -1
+        push_str = ""
+        if 'push_dir_b_x' in row and 'push_dir_b_y' in row:
+            push_deg = np.degrees(np.arctan2(row['push_dir_b_y'], row['push_dir_b_x']))
+            rel = (push_deg - np.degrees(yaw_base) + 180.0) % 360.0 - 180.0
+            push_str = f"   push_dir = {push_deg:+.2f} deg (push - yaw = {rel:+.2f})"
+        print(f"SAMPLE {i}  |  gt_mass = {gt_mass:.4f} kg   gt_mu = {gt_mu:.4f}")
+        print(f"          yaw_base = {yaw_base:+.4f} rad = {np.degrees(yaw_base):+.2f} deg"
+              f"   push_face = {face}   collect_idx = {cidx}{push_str}")
         print("=" * 70)
         analyze_velocity(vel_x, i)
         
@@ -1247,6 +1261,72 @@ def inspect_velocity_vs_yaw(df):
     
     plt.show()
 
+
+# =============================================================================
+# OBJECT YAW HELPERS
+# =============================================================================
+def _yaw_deg(yaw_rad):
+    """Radians -> degrees, rounded so float noise cannot split one yaw into several."""
+    return np.round(np.degrees(np.asarray(yaw_rad, dtype=float)), 2)
+
+
+def _circ_mean_deg(a):
+    """Circular mean in degrees: +179 and -179 average to 180, not 0."""
+    r = np.radians(np.asarray(a, dtype=float))
+    return float(np.degrees(np.arctan2(np.sin(r).mean(), np.cos(r).mean())))
+
+
+def _circ_spread_deg(a, center):
+    """Largest angular distance from `center`, in degrees."""
+    d = (np.asarray(a, dtype=float) - center + 180.0) % 360.0 - 180.0
+    return float(np.abs(d).max())
+
+
+def report_object_yaw(df):
+    """Object yaw in degrees: the set of yaws, the push direction per
+    (yaw x push side), and the collect_idx -> yaw mapping."""
+    if 'obj_yaw_base' not in df.columns:
+        print("\n  [WARNING] no 'obj_yaw_base' column; cannot report object yaw.")
+        return
+    d = df.assign(yaw_deg=_yaw_deg(df['obj_yaw_base']))
+    uniq = np.sort(d['yaw_deg'].unique())
+    print("\n  OBJECT YAW (degrees)")
+    print(f"    distinct yaws : {uniq.size}")
+    print(f"    range         : [{uniq.min():+.2f}, {uniq.max():+.2f}]")
+    if uniq.size > 1:
+        gaps = np.diff(uniq)
+        print(f"    spacing       : min {gaps.min():.2f}, max {gaps.max():.2f}")
+    print(f"    values        : {', '.join(f'{v:+.2f}' for v in uniq)}")
+
+    if {'push_dir_b_x', 'push_dir_b_y'}.issubset(d.columns):
+        d['push_deg'] = np.degrees(np.arctan2(d['push_dir_b_y'], d['push_dir_b_x']))
+        d['push_rel_deg'] = (d['push_deg'] - d['yaw_deg'] + 180.0) % 360.0 - 180.0
+    keys = ['yaw_deg'] + (['push_face_index'] if 'push_face_index' in d.columns else [])
+    g = d.groupby(keys)
+    table = pd.DataFrame({'rows': g.size()})
+    if 'push_deg' in d.columns:
+        table['push_dir_deg'] = g['push_deg'].apply(_circ_mean_deg)
+        table['push_minus_yaw'] = g['push_rel_deg'].apply(_circ_mean_deg)
+        table['max_dev_deg'] = [
+            _circ_spread_deg(grp['push_rel_deg'], c)
+            for (_, grp), c in zip(g, table['push_minus_yaw'])]
+    print("\n  per (object yaw x push side):")
+    print(table.round(2).to_string())
+
+    if 'collect_idx' in d.columns:
+        g = d.groupby('collect_idx')
+        idx = pd.DataFrame({'yaw_deg': g['yaw_deg'].first(),
+                            'n_yaws': g['yaw_deg'].nunique(),
+                            'rows': g.size()})
+        if 'push_face_index' in d.columns:
+            idx['push_face'] = g['push_face_index'].first()
+        print("\n  collect_idx -> object yaw:")
+        print(idx.to_string())
+        mixed = idx.index[idx['n_yaws'] > 1].tolist()
+        if mixed:
+            print(f"  [WARNING] collect_idx {mixed} hold more than one yaw. Each sweep "
+                  f"cell should fix one orientation; check how run_collect_sweep "
+                  f"maps COLLECT_IDX to yaw.")
 
 def main():
     if not os.path.exists(CSV_PATH):

@@ -11,7 +11,7 @@ from sklearn.model_selection import GroupShuffleSplit
 
 from models import PhysicsTransformerEstimator
 from dataset import (create_dataloaders, load_dataset_csv, load_arm_stats,
-                     window_cols, variant_window)
+                     window_cols, variant_window, gather_pinn_windows)
 from configs import (INPUT_VARIANT, COND_DIM, INPUT_DIM, VARIANT_WINDOW_PREFIX,
                      VARIANT_LOG_TRANSFORM, FRAME_MODE)
 from utils import set_seed, clean_force_col
@@ -29,9 +29,9 @@ TOP_NUM = 10
 
 if MULTI_ANGLE:
     if INPUT_VARIANT == "vel_only":
-        time = "20260913_134633"
-        model = "pinn_pcri-L1_p5c10.0_multiangle"
-    if INPUT_VARIANT == "vel_manip_cond":
+            time = "20260913_134633"
+            model = "pinn_pcri-L1_p5c10.0_multiangle"
+    elif INPUT_VARIANT == "vel_manip_cond":
         time = "20260913_102210"
         model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond"
     elif INPUT_VARIANT == "vel_dirmanip_cond":
@@ -44,10 +44,10 @@ if MULTI_ANGLE:
         time = "20260913_124812"
         model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"
     elif INPUT_VARIANT == "vel_osim_seq":
-        time = "<SET_AFTER_TRAINING>"      # e.g. "20260917_101500"
+        time = "20260916_114512"
         model = "pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq"
     elif INPUT_VARIANT == "vel_eff_seq":
-        time = "<SET_AFTER_TRAINING>"
+        time = "20260916_124518"
         model = "pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq"
 else:
     time = "20260811_063229"
@@ -391,29 +391,14 @@ def main():
         else:
             X_in = X_vel
 
-        robot_fz_list, rhs_acc_list = [], []
-        lhs_net_f_list, table_fz_list = [], []
+        # Vectorized gather, same FRAME_MODE axis mapping as training.
+        pw = gather_pinn_windows(df_domain, seq_len)
+        fz_robot_tensor = torch.tensor(pw['robot_fz']).float().to(device)
+        rhs_acc_tensor = torch.tensor(pw['rhs_acc']).float().to(device)
+        net_f_gt_tensor = torch.tensor(pw['lhs_net_f']).float().to(device)
 
-        for _, row in df_domain.iterrows():
-            st = int(row['start_t'])
-            window = range(st, st + seq_len)
-            # Same axis mapping as dataset.create_dataloaders.
-            if FRAME_MODE == "world":
-                robot_fz_list.append([row[f"pinn_robot_wrench_t{t}_ax5"] for t in window])
-                rhs_acc_list.append([row[f"pinn_RHS_acc_t{t}_ax3"] for t in window])
-                lhs_net_f_list.append([row[f"pinn_LHS_wrench_t{t}_ax3"] for t in window])
-                table_fz_list.append([row[f"pinn_table_wrench_t{t}_ax5"] for t in window])
-            else:
-                robot_fz_list.append([row[f"pinn_robot_wrench_t{t}_ax3"] for t in window])
-                rhs_acc_list.append([row[f"pinn_RHS_acc_t{t}_ax5"] for t in window])
-                lhs_net_f_list.append([row[f"pinn_LHS_wrench_t{t}_ax5"] for t in window])
-                table_fz_list.append([row[f"pinn_table_wrench_t{t}_ax3"] for t in window])
-
-        fz_robot_tensor = torch.tensor(np.array(robot_fz_list)).float().to(device)
-        rhs_acc_tensor = torch.tensor(np.array(rhs_acc_list)).float().to(device)
-        net_f_gt_tensor = torch.tensor(np.array(lhs_net_f_list)).float().to(device)
-
-        normal_f_gt = torch.abs(torch.tensor(np.array(table_fz_list)).float().to(device))
+        normal_f_gt = torch.abs(torch.tensor(pw['table_fz']).float().to(device))
+        del pw
         fric_f_gt_tensor = y_gt[:, 1].unsqueeze(1) * normal_f_gt
 
         model.eval()

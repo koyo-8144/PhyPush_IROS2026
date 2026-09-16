@@ -1,3 +1,4 @@
+import re
 import os
 import torch
 import numpy as np
@@ -6,6 +7,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from sklearn.model_selection import train_test_split, GroupShuffleSplit
 from utils import clean_force_col
 from configs import (M_UNSEEN_MAX, MU_UNSEEN_MAX, FRAME_MODE, MULTI_ANGLE,
+                     M_SEEN_MIN, M_SEEN_MAX, MU_SEEN_MIN, MU_SEEN_MAX,
                      USE_ARM_STATE, CSV_PATH,
                      INPUT_VARIANT, COND_DIM, INPUT_DIM, VARIANT_WINDOW_PREFIX,
                      VARIANT_LOG_TRANSFORM,
@@ -148,31 +150,119 @@ def _build_property_groups(df_filtered):
             + df_filtered['gt_mu'].round(6).astype(str)).values, "gt_mass+gt_mu"
 
 
-def load_dataset_csv(csv_path=None, chunksize=50000, verbose=True):
-    """Memory-safe CSV load for TRAINING.
+# =============================================================================
+# MEMORY-SAFE LOADING
+#
+# The sweep CSV is ~15 GB with thousands of columns, most of them per-step
+# pinn_<family>_t<t>_ax<a> arrays over all 6 axes. Training and evaluation read
+# only 4 families on 2 axes (ax3 / ax5, depending on FRAME_MODE). Loading every
+# column as float32 needs more RAM than the machine has; the concat then doubles
+# the peak and the OS swaps until it freezes.
+#
+# load_dataset_csv therefore
+#   1. reads only the columns something downstream uses (usecols),
+#   2. optionally keeps only the seen-domain rows (training uses nothing else),
+#   3. estimates the final size from the first chunk and stops BEFORE the
+#      machine runs out of memory.
+# =============================================================================
+PINN_FAMILIES_USED = ('robot_wrench', 'RHS_acc', 'LHS_wrench', 'table_wrench')
+PINN_AXES_USED = (3, 5)
+_PER_STEP_AXIS_RE = re.compile(r'^(.*)_t(\d+)_ax(\d+)$')
 
-    Keeps EVERY row and EVERY column: create_dataloaders reads the pinn_* physics
-    arrays and needs the full population. The savings come from chunked reading
-    and a float64 -> float32 downcast per chunk.
+
+def select_columns(header):
+    """Columns to load. Drops every per-step *_t<t>_ax<a> column except the pinn
+    families and axes the physics losses read; keeps everything else."""
+    keep, dropped = [], {}
+    used = {f"pinn_{f}" for f in PINN_FAMILIES_USED}
+    for c in header:
+        m = _PER_STEP_AXIS_RE.match(c)
+        if m is None or (m.group(1) in used and int(m.group(3)) in PINN_AXES_USED):
+            keep.append(c)
+        else:
+            dropped[m.group(1)] = dropped.get(m.group(1), 0) + 1
+    return keep, dropped
+
+
+def _mem_available_gb():
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                if line.startswith('MemAvailable:'):
+                    return int(line.split()[1]) / 1e6
+    except OSError:
+        pass
+    return None
+
+
+def load_dataset_csv(csv_path=None, chunksize=20000, verbose=True,
+                     seen_only=False, max_mem_fraction=0.6):
+    """Memory-safe CSV load.
+
+    seen_only=True keeps only rows inside the seen (mass, mu) box, which is all
+    create_dataloaders trains on. Leave it False for evaluate.py, which needs the
+    OOD domains too.
+
+    Raises MemoryError, before the machine starts swapping, if the projected
+    size exceeds max_mem_fraction of the currently available RAM.
     """
     path = csv_path if csv_path is not None else CSV_PATH
+    file_bytes = os.path.getsize(path)
 
+    header = pd.read_csv(path, nrows=0).columns.tolist()
+    usecols, dropped = select_columns(header)
     if verbose:
-        size_gb = os.path.getsize(path) / 1e9 if os.path.exists(path) else float('nan')
-        print(f"[load_dataset_csv] {path}  ({size_gb:.1f} GB) "
-              f"in chunks of {chunksize}, float32 downcast")
+        print(f"[load_dataset_csv] {path}  ({file_bytes / 1e9:.1f} GB), "
+              f"chunks of {chunksize}, float32")
+        print(f"  columns: loading {len(usecols)} of {len(header)}")
+        for fam, n in sorted(dropped.items(), key=lambda kv: -kv[1])[:8]:
+            print(f"    skipped {fam}_t*_ax*  ({n} cols)")
+        if seen_only:
+            print(f"  rows: seen domain only  (m in [{M_SEEN_MIN}, {M_SEEN_MAX}], "
+                  f"mu in [{MU_SEEN_MIN}, {MU_SEEN_MAX}])")
 
-    chunks = []
-    total = 0
-    for chunk in pd.read_csv(path, chunksize=chunksize):
-        float_cols = chunk.select_dtypes(include=['float64']).columns
-        chunk[float_cols] = chunk[float_cols].astype(np.float32)
-        chunks.append(chunk)
-        total += len(chunk)
-        if verbose:
-            print(f"  ... {total} rows", end='\r')
+    avail = _mem_available_gb()
+    chunks, total_in, total_kept = [], 0, 0
+    kept_bytes, checked = 0, False
+    reader = pd.read_csv(path, chunksize=chunksize, usecols=usecols,
+                         dtype={c: np.float32 for c in usecols
+                                if _PER_STEP_AXIS_RE.match(c)
+                                or c.startswith(('input_', 'arm_'))},
+                         low_memory=True)
+    with reader:
+        for chunk in reader:
+            total_in += len(chunk)
+            if seen_only:
+                m, mu = chunk['gt_mass'], chunk['gt_mu']
+                chunk = chunk[(m >= M_SEEN_MIN) & (m <= M_SEEN_MAX)
+                              & (mu >= MU_SEEN_MIN) & (mu <= MU_SEEN_MAX)]
+            float_cols = chunk.select_dtypes(include=['float64']).columns
+            if len(float_cols):
+                chunk = chunk.astype({c: np.float32 for c in float_cols})
+            chunks.append(chunk)
+            total_kept += len(chunk)
+            kept_bytes += int(chunk.memory_usage(deep=True).sum())
 
-    df = pd.concat(chunks, ignore_index=True)
+            if not checked and total_in > 0:
+                # Project the final size from the first chunk: bytes kept per
+                # input row x estimated input rows (file bytes / bytes per row).
+                checked = True
+                est_rows = file_bytes / max(file_bytes_per_row(path, chunksize), 1)
+                projected_gb = kept_bytes / total_in * est_rows / 1e9
+                if verbose:
+                    avail_str = f"{avail:.1f} GB" if avail is not None else "unknown"
+                    print(f"  projected: ~{est_rows:,.0f} rows in file, "
+                          f"~{projected_gb:.2f} GB in memory (x2 peak during "
+                          f"concat), available RAM {avail_str}")
+                if avail is not None and 2 * projected_gb > max_mem_fraction * avail:
+                    raise MemoryError(
+                        f"Loading would need ~{2 * projected_gb:.1f} GB at peak but only "
+                        f"{avail:.1f} GB is available. Use seen_only=True, a smaller "
+                        f"CSV, or drop more columns in select_columns().")
+            if verbose:
+                print(f"  ... {total_in} rows read, {total_kept} kept", end='\r')
+
+    df = pd.concat(chunks, ignore_index=True, copy=False)
     del chunks
 
     if 'gt_fric_force' in df.columns:
@@ -181,9 +271,43 @@ def load_dataset_csv(csv_path=None, chunksize=50000, verbose=True):
     if verbose:
         mem_gb = df.memory_usage(deep=True).sum() / 1e9
         print(f"\n[load_dataset_csv] loaded {len(df)} rows x {df.shape[1]} cols, "
-              f"~{mem_gb:.1f} GB resident")
-
+              f"~{mem_gb:.2f} GB resident")
     return df
+
+
+def file_bytes_per_row(path, n=200):
+    """Average bytes per data line, from the first n lines after the header."""
+    with open(path, 'rb') as f:
+        f.readline()
+        sizes = [len(f.readline()) for _ in range(n)]
+    sizes = [x for x in sizes if x > 0]
+    return sum(sizes) / len(sizes) if sizes else 1
+
+
+def gather_pinn_windows(df, seq_len):
+    """Vectorized replacement for the per-row pinn_* loop.
+
+    Returns dict of (N, seq_len) float32 arrays: robot_fz, rhs_acc, lhs_net_f,
+    table_fz, robot_fx, each read from columns t = start_t .. start_t+seq_len-1,
+    with the same FRAME_MODE axis mapping as before.
+    """
+    if FRAME_MODE == "world":
+        spec = {'robot_fz': ('robot_wrench', 5), 'rhs_acc': ('RHS_acc', 3),
+                'lhs_net_f': ('LHS_wrench', 3), 'table_fz': ('table_wrench', 5),
+                'robot_fx': ('robot_wrench', 3)}
+    else:
+        spec = {'robot_fz': ('robot_wrench', 3), 'rhs_acc': ('RHS_acc', 5),
+                'lhs_net_f': ('LHS_wrench', 5), 'table_fz': ('table_wrench', 3),
+                'robot_fx': ('robot_wrench', 5)}
+
+    st = df['start_t'].values.astype(np.int64)
+    idx = st[:, None] + np.arange(seq_len)[None, :]                 # (N, T)
+    out = {}
+    for key, (fam, ax) in spec.items():
+        cols = [f"pinn_{fam}_t{t}_ax{ax}" for t in range(100)]
+        full = df[cols].values.astype(np.float32, copy=False)       # (N, 100)
+        out[key] = np.take_along_axis(full, idx, axis=1)
+    return out
 
 
 # =============================================================================
@@ -353,28 +477,15 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0,
     X_vel_tensor = torch.tensor(X_vel)
     y_tensor = torch.tensor(y)
 
-    robot_fz_list, rhs_acc_list, lhs_net_f_list, table_fz_list, robot_fx_list = [], [], [], [], []
-    for idx, row in df_filtered.iterrows():
-        st = int(row['start_t'])
-        window_range = range(st, st + seq_len)
-        if FRAME_MODE == "world":
-            robot_fz_list.append([row[f"pinn_robot_wrench_t{t}_ax5"] for t in window_range])
-            rhs_acc_list.append([row[f"pinn_RHS_acc_t{t}_ax3"] for t in window_range])
-            lhs_net_f_list.append([row[f"pinn_LHS_wrench_t{t}_ax3"] for t in window_range])
-            table_fz_list.append([row[f"pinn_table_wrench_t{t}_ax5"] for t in window_range])
-            robot_fx_list.append([row[f"pinn_robot_wrench_t{t}_ax3"] for t in window_range])
-        elif FRAME_MODE == "local":
-            robot_fz_list.append([row[f"pinn_robot_wrench_t{t}_ax3"] for t in window_range])
-            rhs_acc_list.append([row[f"pinn_RHS_acc_t{t}_ax5"] for t in window_range])
-            lhs_net_f_list.append([row[f"pinn_LHS_wrench_t{t}_ax5"] for t in window_range])
-            table_fz_list.append([row[f"pinn_table_wrench_t{t}_ax3"] for t in window_range])
-            robot_fx_list.append([row[f"pinn_robot_wrench_t{t}_ax5"] for t in window_range])
-
-    fz_robot_tensor = torch.tensor(np.array(robot_fz_list), dtype=torch.float32)
-    rhs_acc_tensor = torch.tensor(np.array(rhs_acc_list), dtype=torch.float32)
-    lhs_net_f_tensor = torch.tensor(np.array(lhs_net_f_list), dtype=torch.float32)
-    fz_normal_tensor = torch.tensor(np.array(table_fz_list), dtype=torch.float32)
-    fx_robot_tensor = torch.tensor(np.array(robot_fx_list), dtype=torch.float32)
+    # Vectorized gather of the physics windows (the per-row iterrows loop built
+    # five Python lists of ~N x 60 floats each, slow and memory-hungry).
+    pw = gather_pinn_windows(df_filtered, seq_len)
+    fz_robot_tensor = torch.tensor(pw['robot_fz'], dtype=torch.float32)
+    rhs_acc_tensor = torch.tensor(pw['rhs_acc'], dtype=torch.float32)
+    lhs_net_f_tensor = torch.tensor(pw['lhs_net_f'], dtype=torch.float32)
+    fz_normal_tensor = torch.tensor(pw['table_fz'], dtype=torch.float32)
+    fx_robot_tensor = torch.tensor(pw['robot_fx'], dtype=torch.float32)
+    del pw
     start_t_tensor = torch.tensor(df_filtered['start_t'].values.astype(np.int64))
 
     # =================================================================
