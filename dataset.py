@@ -8,6 +8,7 @@ from utils import clean_force_col
 from configs import (M_UNSEEN_MAX, MU_UNSEEN_MAX, FRAME_MODE, MULTI_ANGLE,
                      USE_ARM_STATE, CSV_PATH,
                      INPUT_VARIANT, COND_DIM, INPUT_DIM, VARIANT_WINDOW_PREFIX,
+                     VARIANT_LOG_TRANSFORM,
                      MAX_PUSH_LATERAL_OFFSET, MAX_PUSH_COM_OFFSET)
 
 # =============================================================================
@@ -56,8 +57,12 @@ ARM_FEATURE_COLS = [c for c in ARM_STATIC_COLS
                     if c != 'push_start_reached_flag'] + ARM_STATE_COLS
 
 # Per-step window channels, aligned one-to-one with input_vel_0..59.
-# These are the columns the four input variants actually draw from.
-WINDOW_PREFIXES = ('arm_manip_w', 'arm_dir_manip_w')
+# These are the columns the input variants actually draw from.
+#   arm_manip_w      manipulability w                       (vel_manip_*)
+#   arm_dir_manip_w  directional manipulability w_dir       (vel_dirmanip_*)
+#   arm_lam_w        mean translational diag of Lambda [kg] (vel_osim_seq)
+#   arm_meff_w       effective mass along push dir [kg]     (vel_eff_seq)
+WINDOW_PREFIXES = ('arm_manip_w', 'arm_dir_manip_w', 'arm_lam_w', 'arm_meff_w')
 
 
 def window_cols(df_or_header, prefix):
@@ -71,6 +76,35 @@ def window_cols(df_or_header, prefix):
     cols = [c for c in header
             if c.startswith(prefix) and c[len(prefix):].isdigit()]
     return sorted(cols, key=lambda c: int(c[len(prefix):]))
+
+
+def variant_window(df, prefix=None, log_transform=None):
+    """The per-step window channel for a variant, AFTER the variant transform.
+
+    Shared by create_dataloaders and evaluate.py so both apply the identical
+    transform before standardization.
+
+    Returns (W, valid, cols):
+      W      (N, T) float32. log(x) where log_transform, raw otherwise.
+             Invalid rows are filled with 0.0 so W stays finite; drop them
+             with `valid`.
+      valid  (N,) bool. For log-transformed channels, rows whose every step is
+             finite and > 0. The collector writes a failed m_eff as 0.0, which
+             is not a real mass. Always all-True for untransformed channels.
+      cols   the ordered column names.
+    """
+    prefix = VARIANT_WINDOW_PREFIX if prefix is None else prefix
+    log_transform = VARIANT_LOG_TRANSFORM if log_transform is None else log_transform
+    cols = window_cols(df, prefix)
+    if not cols:
+        return None, None, cols
+    W = df[cols].values.astype(np.float64)
+    if log_transform:
+        valid = np.isfinite(W).all(axis=1) & (W > 0.0).all(axis=1)
+        W = np.where(valid[:, None], np.log(np.clip(W, 1e-12, None)), 0.0)
+    else:
+        valid = np.ones(len(W), dtype=bool)
+    return W.astype(np.float32), valid, cols
 
 
 def _report_column_availability(df):
@@ -174,6 +208,8 @@ def save_arm_stats(feature_cols, mean, std, csv_path=None, seq_len=None):
              std=np.asarray(std, dtype=np.float32),
              mode=str(INPUT_VARIANT),
              variant=str(INPUT_VARIANT),
+             window_prefix=str(VARIANT_WINDOW_PREFIX),
+             log_transform=bool(VARIANT_LOG_TRANSFORM),
              seq_len=int(seq_len) if seq_len is not None else -1)
     print(f"[VARIANT] saved standardization stats -> {path}")
 
@@ -195,6 +231,14 @@ def load_arm_stats(csv_path=None):
             f"Stats at {path} were saved for variant '{saved}', but "
             f"configs.INPUT_VARIANT is now '{INPUT_VARIANT}'. Retrain or switch back."
         )
+    # Sidecars written before the log transform existed carry no flag; they were
+    # all linear.
+    saved_log = bool(d['log_transform']) if 'log_transform' in d else False
+    if saved_log != bool(VARIANT_LOG_TRANSFORM):
+        raise ValueError(
+            f"Stats at {path} were computed with log_transform={saved_log}, but "
+            f"configs says {bool(VARIANT_LOG_TRANSFORM)} for '{INPUT_VARIANT}'. "
+            f"The mean/std would be applied on the wrong scale.")
     return cols, d['mean'], d['std']
 
 
@@ -285,6 +329,18 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0,
         f"the frame the physics loop iterates.")
     print(f"[FILTER] window (start_t + {seq_len} <= 100): {len(df_filtered)} rows kept")
 
+    # Log-transformed inertial channels cannot take a zero / non-finite step.
+    # Drop those rows here, BEFORE any tensor is built, so every array and the
+    # group split see the same rows.
+    if MULTI_ANGLE and USE_ARM_STATE and VARIANT_LOG_TRANSFORM:
+        _, _valid, _cols = variant_window(df_filtered)
+        if _cols:
+            n_bad = int((~_valid).sum())
+            if n_bad:
+                df_filtered = df_filtered[_valid].copy()
+            print(f"[FILTER] '{VARIANT_WINDOW_PREFIX}*' positive & finite: "
+                  f"{len(df_filtered)} rows kept ({n_bad} dropped)")
+
 
     X_acc_flat = df_filtered[acc_cols].values.astype(np.float32)
     X_vel_flat = df_filtered[vel_cols].values.astype(np.float32)
@@ -349,7 +405,7 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0,
     # =================================================================
     # VARIANT CHANNELS
     #
-    # All four non-baseline variants read the SAME 60-step window family, so the
+    # Every non-baseline variant reads a 60-step window family, so the
     # scalar and the sequence forms describe the same slice of time as the
     # velocity input. The scalar is the MINIMUM over that window, recomputed
     # here -- deliberately not the `worst_*` column, which is the minimum over
@@ -372,7 +428,7 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0,
                 "or set INPUT_VARIANT='vel_only'."
             )
 
-        wcols = window_cols(df_filtered, VARIANT_WINDOW_PREFIX)
+        W, _, wcols = variant_window(df_filtered)             # (N, T), transformed
         if not wcols:
             raise ValueError(
                 f"INPUT_VARIANT='{INPUT_VARIANT}' needs "
@@ -384,8 +440,6 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0,
                 f"but the velocity input has {seq_len}. They must be the same "
                 f"window or the two channels are not time-aligned."
             )
-
-        W = df_filtered[wcols].values.astype(np.float32)          # (N, T)
 
         if COND_DIM > 0:
             # Minimum over the 60-step window -- see the note above.
@@ -413,13 +467,16 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0,
             std = np.array([[W[train_idx].std()]], dtype=np.float32) + 1e-8
             seq_tensor = torch.tensor(((W - mean) / std)[:, :, None])   # (N, T, 1)
 
-            save_arm_stats([f"{VARIANT_WINDOW_PREFIX}*"], mean, std, seq_len=seq_len)
-            print(f"[VARIANT] '{INPUT_VARIANT}': input channel "
+            feat_name = (f"log({VARIANT_WINDOW_PREFIX}*)" if VARIANT_LOG_TRANSFORM
+                         else f"{VARIANT_WINDOW_PREFIX}*")
+            save_arm_stats([feat_name], mean, std, seq_len=seq_len)
+            print(f"[VARIANT] '{INPUT_VARIANT}': input channel {feat_name} "
                   f"{tuple(seq_tensor.shape)} concatenated to velocity "
                   f"-> input_dim={INPUT_DIM}")
             print(f"[VARIANT]   train mean={float(mean[0,0]):.6f} "
                   f"std={float(std[0,0]):.6f} "
-                  f"per-step range=[{W.min():.6f}, {W.max():.6f}]")
+                  f"per-step range=[{W.min():.6f}, {W.max():.6f}]"
+                  + (" (log space)" if VARIANT_LOG_TRANSFORM else ""))
 
     # =================================================================
     # BATCH LAYOUT

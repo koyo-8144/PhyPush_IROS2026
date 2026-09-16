@@ -11,8 +11,9 @@ from sklearn.model_selection import GroupShuffleSplit
 
 from models import PhysicsTransformerEstimator
 from dataset import (create_dataloaders, load_dataset_csv, load_arm_stats,
-                     window_cols)
-from configs import INPUT_VARIANT, COND_DIM, INPUT_DIM, VARIANT_WINDOW_PREFIX
+                     window_cols, variant_window)
+from configs import (INPUT_VARIANT, COND_DIM, INPUT_DIM, VARIANT_WINDOW_PREFIX,
+                     VARIANT_LOG_TRANSFORM, FRAME_MODE)
 from utils import set_seed, clean_force_col
 from configs import (M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN,
                      M_UNSEEN_MAX, MU_UNSEEN_MAX, GLOBAL_M_RANGE, GLOBAL_MU_RANGE,
@@ -27,6 +28,9 @@ SMOOTHING_WINDOW_SIZE = 3
 TOP_NUM = 10
 
 if MULTI_ANGLE:
+    if INPUT_VARIANT == "vel_only":
+        time = "20260913_134633"
+        model = "pinn_pcri-L1_p5c10.0_multiangle"
     if INPUT_VARIANT == "vel_manip_cond":
         time = "20260913_102210"
         model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond"
@@ -38,13 +42,21 @@ if MULTI_ANGLE:
         model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq"
     elif INPUT_VARIANT == "vel_dirmanip_seq":
         time = "20260913_124812"
-        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"    
-    elif INPUT_VARIANT == "vel_only":
-        time = "20260913_134633"
-        model = "pinn_pcri-L1_p5c10.0_multiangle"
+        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"
+    elif INPUT_VARIANT == "vel_osim_seq":
+        time = "<SET_AFTER_TRAINING>"      # e.g. "20260917_101500"
+        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq"
+    elif INPUT_VARIANT == "vel_eff_seq":
+        time = "<SET_AFTER_TRAINING>"
+        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq"
 else:
     time = "20260811_063229"
     model = "pinn_pcri-L1_p5c10.0"
+
+if time.startswith("<"):
+    raise SystemExit(
+        f"evaluate.py: no trained run is set for INPUT_VARIANT='{INPUT_VARIANT}'. "
+        f"Train it, then put its run timestamp in the path table above.")
 
 CHECKPOINT_DIR = f"./results/checkpoints/from_20260913/{time}/{model}"
 
@@ -271,11 +283,25 @@ def main():
     if use_arm_state:
         _, stat_mean, stat_std = get_eval_arm_stats()
 
-        wcols = window_cols(df, VARIANT_WINDOW_PREFIX)
+        ckpt_prefix = config.get('variant_window_prefix', VARIANT_WINDOW_PREFIX)
+        ckpt_log = bool(config.get('variant_log_transform', False))
+        if input_variant != INPUT_VARIANT or ckpt_prefix != VARIANT_WINDOW_PREFIX \
+                or ckpt_log != bool(VARIANT_LOG_TRANSFORM):
+            raise ValueError(
+                f"Checkpoint was trained as '{input_variant}' (channel {ckpt_prefix}, "
+                f"log={ckpt_log}) but configs selects '{INPUT_VARIANT}' "
+                f"(channel {VARIANT_WINDOW_PREFIX}, log={VARIANT_LOG_TRANSFORM}).")
+
+        # Same transform as training (log for the inertial channels).
+        W, valid, wcols = variant_window(df)
         if not wcols:
             raise ValueError(f"No '{VARIANT_WINDOW_PREFIX}*' columns for variant "
                              f"'{input_variant}'.")
-        W = df[wcols].values.astype(np.float32)
+        if not valid.all():
+            print(f"[FILTER] dropping {int((~valid).sum())} rows with a zero / "
+                  f"non-finite '{VARIANT_WINDOW_PREFIX}*' step (as in training)")
+            df = df[valid].copy()
+            W = W[valid]
 
         if use_cond:
             # Same reduction as training: MINIMUM over the 60-step window, not
@@ -371,10 +397,17 @@ def main():
         for _, row in df_domain.iterrows():
             st = int(row['start_t'])
             window = range(st, st + seq_len)
-            robot_fz_list.append([row[f"pinn_robot_wrench_t{t}_ax5"] for t in window])
-            rhs_acc_list.append([row[f"pinn_RHS_acc_t{t}_ax3"] for t in window])
-            lhs_net_f_list.append([row[f"pinn_LHS_wrench_t{t}_ax3"] for t in window])
-            table_fz_list.append([row[f"pinn_table_wrench_t{t}_ax5"] for t in window])
+            # Same axis mapping as dataset.create_dataloaders.
+            if FRAME_MODE == "world":
+                robot_fz_list.append([row[f"pinn_robot_wrench_t{t}_ax5"] for t in window])
+                rhs_acc_list.append([row[f"pinn_RHS_acc_t{t}_ax3"] for t in window])
+                lhs_net_f_list.append([row[f"pinn_LHS_wrench_t{t}_ax3"] for t in window])
+                table_fz_list.append([row[f"pinn_table_wrench_t{t}_ax5"] for t in window])
+            else:
+                robot_fz_list.append([row[f"pinn_robot_wrench_t{t}_ax3"] for t in window])
+                rhs_acc_list.append([row[f"pinn_RHS_acc_t{t}_ax5"] for t in window])
+                lhs_net_f_list.append([row[f"pinn_LHS_wrench_t{t}_ax5"] for t in window])
+                table_fz_list.append([row[f"pinn_table_wrench_t{t}_ax3"] for t in window])
 
         fz_robot_tensor = torch.tensor(np.array(robot_fz_list)).float().to(device)
         rhs_acc_tensor = torch.tensor(np.array(rhs_acc_list)).float().to(device)

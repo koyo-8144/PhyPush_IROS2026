@@ -87,7 +87,9 @@ def main():
     use_cond = cond_dimension > 0
     use_seq_channel = input_dimension > 1
     print(f"[VARIANT] {input_variant}: input_dim={input_dimension}, "
-          f"cond_dim={cond_dimension}")
+          f"cond_dim={cond_dimension}, "
+          f"channel={config.get('variant_window_prefix')}, "
+          f"log={config.get('variant_log_transform', False)}")
 
     p_c = config['pinn_coeffs']
     pinn_coeff_1 = p_c['p1']
@@ -160,7 +162,7 @@ def main():
         version=transformer_ver,
         max_mass_scale=last_layer_ms,
         max_mu_scale=last_layer_mus,
-        cond_dim=cond_dimension, # Dynamically set to 0 or 2
+        cond_dim=cond_dimension, # from configs.VARIANT_TABLE: 0 or 1
     ).to(device)
 
     if lr_optimizer == "Adam":
@@ -178,7 +180,8 @@ def main():
             epochs=num_epochs, pct_start=0.1, anneal_strategy='cos'
         )
         
-    print(f"Model Initialized with input_dim=1, seq_len={seq_len}, and cond_dim={cond_dimension}")
+    print(f"Model Initialized with input_dim={input_dimension}, seq_len={seq_len}, "
+          f"cond_dim={cond_dimension} (variant {input_variant})")
 
     # ==========================================
     # 4. TRAINING LOOP WITH LIVE PLOTTING & SAVING

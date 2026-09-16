@@ -5,28 +5,26 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from configs import (G, M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN,
                      CSV_PATH, FRAME_MODE, MULTI_ANGLE, USE_ARM_STATE,
-                     INPUT_VARIANT, VARIANT_WINDOW_PREFIX)
+                     INPUT_VARIANT, VARIANT_WINDOW_PREFIX, VARIANT_TABLE)
 
 from dataset import (create_dataloaders, MULTI_ANGLE_COLS, ARM_STATIC_COLS,
-                     ARM_STATE_COLS, ARM_FEATURE_COLS, window_cols)
+                     ARM_STATE_COLS, ARM_FEATURE_COLS, window_cols,
+                     variant_window)
 from utils import clean_force_col, add_min_max_text
 
-ALL_VARIANTS = {
-    "vel_only":          None,
-    "vel_manip_cond":    "arm_manip_w",
-    "vel_dirmanip_cond": "arm_dir_manip_w",
-    "vel_manip_seq":     "arm_manip_w",
-    "vel_dirmanip_seq":  "arm_dir_manip_w",
+# Derived from configs.VARIANT_TABLE so this script can never disagree with
+# what train.py builds.
+ALL_VARIANTS = {name: spec[0] for name, spec in VARIANT_TABLE.items()}
+
+# How each variant reaches the model: (mechanism, input_dim, cond_dim).
+VARIANT_SHAPE = {
+    name: ("baseline" if pfx is None else
+           "cond token" if cdim > 0 else "input channel", idim, cdim)
+    for name, (pfx, cdim, idim, _) in VARIANT_TABLE.items()
 }
 
-# How each variant reaches the model. Mirrors configs.COND_DIM / INPUT_DIM.
-VARIANT_SHAPE = {
-    "vel_only":          ("baseline",      1, 0),
-    "vel_manip_cond":    ("cond token",    1, 1),
-    "vel_dirmanip_cond": ("cond token",    1, 1),
-    "vel_manip_seq":     ("input channel", 2, 0),
-    "vel_dirmanip_seq":  ("input channel", 2, 0),
-}
+# Channels that are log-transformed before standardization (inertial ones).
+LOG_PREFIXES = {spec[0] for spec in VARIANT_TABLE.values() if spec[3]}
 
 
 def visualize_all_variants(df, num_samples=3, standardize=True):
@@ -42,7 +40,9 @@ def visualize_all_variants(df, num_samples=3, standardize=True):
                       prepended to the encoder sequence -- it has no time axis,
                       which is why it is flat here.
       *_seq           the full 60-step channel on a second y-axis, concatenated
-                      to velocity so input_dim becomes 2.
+                      to velocity so input_dim becomes 2. vel_osim_seq (Lambda)
+                      and vel_eff_seq (m_eff) are log-transformed first, so with
+                      standardize=True their panels show standardized log values.
 
     Because every panel shows the same three rows, the comparison is like for
     like: the question each variant poses is visible side by side.
@@ -64,10 +64,19 @@ def visualize_all_variants(df, num_samples=3, standardize=True):
     T = len(vel_cols)
 
     # Resolve every channel once, and report which variants this CSV supports.
-    channels = {}
-    for pfx in set(v for v in ALL_VARIANTS.values() if v is not None):
+    channels = {}       # raw values, for raw display and scalar reductions
+    model_space = {}    # after the variant transform (log for inertial channels)
+    valid_rows = {}
+    for pfx in sorted(set(v for v in ALL_VARIANTS.values() if v is not None)):
         cols = window_cols(df, pfx)
         channels[pfx] = df[cols].values.astype(np.float32) if cols else None
+        if cols:
+            Wt, ok, _ = variant_window(df, prefix=pfx,
+                                       log_transform=pfx in LOG_PREFIXES)
+            model_space[pfx], valid_rows[pfx] = Wt, ok
+            if not ok.all():
+                print(f"  [NOTE] '{pfx}*': {int((~ok).sum())} rows with a zero / "
+                      f"non-finite step; training drops them for this variant.")
         if cols and len(cols) != T:
             print(f"  [ERROR] '{pfx}*' has {len(cols)} steps but velocity has {T}. "
                   f"Not time-aligned.")
@@ -84,7 +93,12 @@ def visualize_all_variants(df, num_samples=3, standardize=True):
         if ok:
             usable.append(name)
 
-    idx = np.linspace(0, len(df) - 1, min(num_samples, len(df))).astype(int)
+    # Pick rows valid for EVERY available channel so all panels show the same rows.
+    all_ok = np.ones(len(df), dtype=bool)
+    for ok in valid_rows.values():
+        all_ok &= ok
+    cand = np.flatnonzero(all_ok) if all_ok.any() else np.arange(len(df))
+    idx = cand[np.linspace(0, len(cand) - 1, min(num_samples, len(cand))).astype(int)]
     vel = df[vel_cols].values.astype(np.float32)
 
     # Standardization constants, computed over the whole subset. The real
@@ -94,10 +108,12 @@ def visualize_all_variants(df, num_samples=3, standardize=True):
     for pfx, W in channels.items():
         if W is None:
             continue
-        mn = W.min(axis=1)
+        ok = valid_rows[pfx]
+        mn = W[ok].min(axis=1)
+        Wt = model_space[pfx][ok]          # sequence stats in model space
         stats[pfx] = {
             "cond_mean": float(mn.mean()), "cond_std": float(mn.std()) + 1e-8,
-            "seq_mean": float(W.mean()),   "seq_std": float(W.std()) + 1e-8,
+            "seq_mean": float(Wt.mean()),  "seq_std": float(Wt.std()) + 1e-8,
         }
 
     print(f"\n  showing rows {list(idx)}")
@@ -148,18 +164,27 @@ def visualize_all_variants(df, num_samples=3, standardize=True):
                         transform=ax.transAxes, fontsize=7, color="tab:red")
 
             else:
-                W = channels[pfx]
-                seq = ((W[i] - stats[pfx]["seq_mean"]) / stats[pfx]["seq_std"]
-                       if standardize else W[i])
+                is_log = pfx in LOG_PREFIXES
+                if standardize:
+                    seq = ((model_space[pfx][i] - stats[pfx]["seq_mean"])
+                           / stats[pfx]["seq_std"])
+                    ylab = "log channel (std)" if is_log else "channel (std)"
+                else:
+                    seq = channels[pfx][i]
+                    ylab = f"{pfx}* [kg]" if is_log else f"{pfx}*"
+                color = "tab:brown" if is_log else "tab:purple"
                 ax2 = ax.twinx()
-                ax2.plot(steps, seq, color="tab:purple", linewidth=1.6,
+                ax2.plot(steps, seq, color=color, linewidth=1.6,
                          label="2nd input channel")
-                ax2.set_ylabel("channel (std)" if standardize else "channel",
-                               color="tab:purple", fontsize=8)
-                ax2.tick_params(axis='y', labelcolor="tab:purple", labelsize=7)
+                if is_log and not standardize:
+                    ax2.set_yscale("log")
+                ax2.set_ylabel(ylab, color=color, fontsize=8)
+                ax2.tick_params(axis='y', labelcolor=color, labelsize=7)
                 ax2.grid(False)
-                ax.text(0.02, 0.06, f"{T} steps, concatenated\ninput_dim=2",
-                        transform=ax.transAxes, fontsize=7, color="tab:purple")
+                ax.text(0.02, 0.06,
+                        f"{pfx}*, {T} steps{', log' if is_log else ''}\n"
+                        f"concatenated, input_dim=2",
+                        transform=ax.transAxes, fontsize=7, color=color)
 
             if c == 0:
                 ax.text(-0.28, 0.5, f"{name}\n({mech})", transform=ax.transAxes,
@@ -172,7 +197,8 @@ def visualize_all_variants(df, num_samples=3, standardize=True):
             if r == n_rows - 1:
                 ax.set_xlabel("Window step", fontsize=8)
 
-    fig.suptitle("What each INPUT_VARIANT feeds the model (same rows throughout)",
+    fig.suptitle(f"What each INPUT_VARIANT feeds the model (same rows throughout, "
+                 f"{'standardized' if standardize else 'raw'})",
                  fontsize=14, fontweight="bold")
     plt.tight_layout(rect=[0.02, 0, 1, 0.97])
     plt.show()
@@ -182,7 +208,8 @@ def visualize_all_variants(df, num_samples=3, standardize=True):
     # ------------------------------------------------------------------
     print("\n  Information the SCALAR reduction discards:")
     for pfx, W in channels.items():
-        if W is None:
+        # Only the manipulability channels have a scalar (cond) variant.
+        if W is None or pfx in LOG_PREFIXES:
             continue
         mn, mx = W.min(axis=1), W.max(axis=1)
         within = (mx - mn)                  # per-push variation over the window
@@ -407,6 +434,14 @@ def report_variant_window(df, num_samples=6):
         print("=" * 70 + "\n")
         return
 
+    if VARIANT_WINDOW_PREFIX in LOG_PREFIXES:
+        # Inertial channels have their own report (max is the adverse reduction,
+        # and there is no whole-push column to compare against).
+        print(f"  '{VARIANT_WINDOW_PREFIX}*' is an inertial channel; see "
+              f"report_inertial_window below.")
+        print("=" * 70 + "\n")
+        return
+
     wcols = window_cols(df, VARIANT_WINDOW_PREFIX)
     if not wcols:
         print(f"  [WARNING] No '{VARIANT_WINDOW_PREFIX}*' columns in this CSV.")
@@ -602,6 +637,299 @@ def compare_variant_channels(df):
 
     fig.suptitle("Manipulability vs directional manipulability",
                  fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    plt.show()
+    print("=" * 70 + "\n")
+
+
+# =============================================================================
+# INERTIAL WINDOW CHANNELS: m_eff and Lambda
+# =============================================================================
+# Both are computed per physics step in task_space_all_continuous_actions_phypush.py
+# (_run_physics_step -> _operational_space_inertia) and stored in arm_state at
+#   index 25: m_eff    = 1 / (u^T Lambda^-1 u)          effective mass along push dir u
+#   index 26: lam_mean = mean(diag(Lambda[0:3, 0:3]))   direction-free translational mean
+# with Lambda = (J M^-1 J^T)^-1, J in the raw Isaac [linear, angular] row order.
+# off_policy_algorithm.get_arm_window slices them on the SAME window as
+# input_vel_*, so arm_meff_w{t} / arm_lam_w{t} line up with input_vel_{t}.
+INERTIAL_CHANNELS = {
+    # prefix          (label,                                   at-impact column,     color)
+    "arm_meff_w": (r"Effective mass $m_{eff}(u)$ [kg]",          "arm_meff_at_impact", "tab:green"),
+    "arm_lam_w":  (r"Mean translational $\Lambda_{ii}$ [kg]",   "arm_lam_at_impact",  "tab:brown"),
+}
+
+
+def report_inertial_window(df, num_samples=6, log_scale=False):
+    """Visualize the 60-step operational-space inertia channels.
+
+    One row of panels per channel (m_eff, Lambda):
+      1. raw sequences for evenly spaced rows
+      2. mean +/- 1 std envelope across rows, with the window MAX marked --
+         max is the adverse reduction for inertial channels (the arm's own
+         inertia swamps the object's), mirroring min for manipulability
+      3. distribution of the window max, with the at-impact value overlaid
+      4. window max vs object yaw, split by push side
+
+    A final figure relates the two channels to each other, to the object mass,
+    and to directional manipulability, and overlays both on velocity for one row.
+
+    log_scale=True uses a log y-axis. Lambda is the inverse of a matrix that goes
+    singular near kinematic singularities, so a few rows can be orders of
+    magnitude above the rest.
+    """
+    print("\n" + "=" * 70)
+    print("INERTIAL WINDOW CHANNELS  (m_eff, Lambda)")
+    print("=" * 70)
+
+    vel_cols = window_cols(df, "input_vel_")
+    T_vel = len(vel_cols)
+
+    data = {}
+    for pfx, (label, impact_col, _) in INERTIAL_CHANNELS.items():
+        cols = window_cols(df, pfx)
+        if not cols:
+            print(f"  [WARNING] No '{pfx}*' columns. Re-collect with the 4-channel "
+                  f"get_arm_window (channels 23..26).")
+            continue
+        W = df[cols].values.astype(np.float64)                  # (N, T)
+        T = W.shape[1]
+        if T != T_vel:
+            print(f"  [ERROR] '{pfx}*' has {T} steps but input_vel_* has {T_vel}. "
+                  f"Not time-aligned.")
+
+        bad = ~np.isfinite(W) | (W <= 0.0)
+        # _operational_space_inertia maps NaN/inf m_eff to 0.0, so a zero here
+        # is a failed computation, not a real mass.
+        n_bad_rows = int(bad.any(axis=1).sum())
+
+        print(f"\n  {pfx}0..{T - 1}   ({label})")
+        print(f"    rows                 : {len(W)}")
+        print(f"    per-step value       : median {np.nanmedian(W):.4f}  "
+              f"range [{np.nanmin(W):.4f}, {np.nanmax(W):.4f}] kg")
+        if n_bad_rows:
+            print(f"    [WARNING] {n_bad_rows} rows contain zero / non-finite values "
+                  f"(failed solve or singular Lambda). Excluded from the stats below.")
+        good = ~bad.any(axis=1)
+        Wg = W[good]
+        if len(Wg) == 0:
+            print("    no valid rows; skipping.")
+            continue
+
+        win_max = Wg.max(axis=1)
+        win_min = Wg.min(axis=1)
+        within = (win_max - win_min) / np.maximum(Wg.mean(axis=1), 1e-12)
+        print(f"    window max           : mean {win_max.mean():.4f}  "
+              f"std {win_max.std():.4f}  range [{win_max.min():.4f}, {win_max.max():.4f}]")
+        print(f"    within-push change   : mean {100 * within.mean():.2f}% of the "
+              f"row mean  (max {100 * within.max():.1f}%)")
+        print(f"    across-push rel. std : {win_max.std() / max(win_max.mean(), 1e-12):.3f}")
+
+        # Anchor check: w0 is the impact sample by construction.
+        if impact_col in df.columns:
+            imp = df[impact_col].values.astype(np.float64)
+            err = np.abs(imp - W[:, 0])[good]
+            rel = err / np.maximum(np.abs(imp[good]), 1e-12)
+            print(f"    anchor |w0 - {impact_col}| : max {err.max():.2e} "
+                  f"(rel {rel.max():.2e})  "
+                  f"{'OK' if rel.max() < 1e-4 else '*** window not anchored at start_t ***'}")
+
+        # Heavy tail: a sign of near-singular configurations inside the window.
+        p50, p99 = np.percentile(win_max, [50, 99])
+        if p99 > 10 * p50:
+            print(f"    [NOTE] heavy tail: p99 {p99:.3f} > 10x median {p50:.3f}. "
+                  f"Consider log_scale=True, and a log transform before "
+                  f"standardizing if this becomes an input channel.")
+
+        data[pfx] = dict(W=W, good=good, win_max_all=np.where(good, W.max(axis=1), np.nan))
+
+    if not data:
+        print("=" * 70 + "\n")
+        return
+
+    # ------------------------------------------------------------------
+    # Figure 1: per-channel panels
+    # ------------------------------------------------------------------
+    sns.set_theme(style="whitegrid")
+    n_rows = len(data)
+    fig, axes = plt.subplots(n_rows, 4, figsize=(22, 4.8 * n_rows), squeeze=False)
+    sample_idx = np.linspace(0, len(df) - 1, min(num_samples, len(df))).astype(int)
+
+    for r, (pfx, d) in enumerate(data.items()):
+        label, impact_col, color = INERTIAL_CHANNELS[pfx]
+        W, good = d["W"], d["good"]
+        Wg = W[good]
+        steps = np.arange(W.shape[1])
+        win_max = Wg.max(axis=1)
+
+        # 1. raw sequences
+        ax = axes[r][0]
+        for i in sample_idx:
+            gm = df['gt_mass'].iloc[i] if 'gt_mass' in df.columns else float('nan')
+            ax.plot(steps, W[i], linewidth=1.4, alpha=0.85,
+                    label=f"row {i}  m_obj={gm:.2f}")
+        ax.set_title(f"{pfx}*: {len(sample_idx)} raw sequences")
+        ax.set_xlabel("Window step (aligned to input_vel_*)")
+        ax.set_ylabel(label)
+        ax.legend(fontsize=7)
+
+        # 2. envelope + adverse reduction
+        ax = axes[r][1]
+        mu_t, sd_t = Wg.mean(axis=0), Wg.std(axis=0)
+        med_t = np.median(Wg, axis=0)
+        ax.plot(steps, mu_t, color=color, linewidth=2.2, label="mean")
+        ax.plot(steps, med_t, color=color, linestyle=":", linewidth=1.6, label="median")
+        ax.fill_between(steps, np.maximum(mu_t - sd_t, 1e-9), mu_t + sd_t,
+                        color=color, alpha=0.2, label="+/- 1 std")
+        ax.axhline(win_max.mean(), color="tab:red", linestyle="--", linewidth=1.5,
+                   label=f"mean window max ({win_max.mean():.3f})")
+        argmax_t = Wg.argmax(axis=1)
+        ax2 = ax.twinx()
+        ax2.hist(argmax_t, bins=np.arange(W.shape[1] + 1) - 0.5, color="gray",
+                 alpha=0.25)
+        ax2.set_ylabel("count of argmax step", color="gray", fontsize=8)
+        ax2.grid(False)
+        ax.set_title("Across-row envelope (gray: where the max occurs)")
+        ax.set_xlabel("Window step")
+        ax.set_ylabel(label)
+        ax.legend(fontsize=7, loc="upper left")
+
+        # 3. distribution of window max vs at-impact
+        ax = axes[r][2]
+        sns.histplot(win_max, kde=True, color="tab:red", stat="density", alpha=0.5,
+                     ax=ax, label="window max", log_scale=log_scale)
+        if impact_col in df.columns:
+            imp = df[impact_col].values.astype(np.float64)[good]
+            sns.histplot(imp, kde=True, color=color, stat="density", alpha=0.4,
+                         ax=ax, label="at impact (w0)", log_scale=log_scale)
+        ax.set_title("Window max vs value at impact")
+        ax.set_xlabel(label)
+        ax.legend(fontsize=8)
+
+        # 4. vs yaw / push side
+        ax = axes[r][3]
+        if {'obj_yaw_base', 'push_face_index'}.issubset(df.columns):
+            pdf = pd.DataFrame({
+                "yaw_deg": np.degrees(df['obj_yaw_base'].values),
+                "push_face": df['push_face_index'].values,
+                "v": d["win_max_all"],
+            }).dropna()
+            for face, sub in pdf.groupby("push_face"):
+                agg = sub.groupby("yaw_deg")["v"].agg(['mean', 'std']).reset_index()
+                ax.errorbar(agg["yaw_deg"], agg["mean"], yerr=agg["std"].fillna(0),
+                            marker='o', markersize=4, capsize=2, linewidth=1.3,
+                            label=f"push_face={int(face)}")
+            cell = pdf.groupby(["yaw_deg", "push_face"])["v"].mean()
+            if len(cell) > 1:
+                spread = 100 * (cell.max() - cell.min()) / max(cell.mean(), 1e-12)
+                print(f"  {pfx}: window-max spread across (yaw x side) cells = "
+                      f"{spread:.1f}% of mean")
+            ax.legend(fontsize=8)
+        else:
+            ax.text(0.5, 0.5, "obj_yaw_base / push_face_index missing",
+                    ha="center", va="center", transform=ax.transAxes)
+        ax.set_title("Window max vs object yaw")
+        ax.set_xlabel("Object yaw [deg]")
+        ax.set_ylabel(f"window max {label}")
+
+        if log_scale:
+            for k in (0, 1, 3):
+                axes[r][k].set_yscale("log")
+
+    fig.suptitle(f"Operational-space inertia over the {T_vel}-step inference window "
+                 f"(N={len(df)})", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    plt.show()
+
+    # ------------------------------------------------------------------
+    # Figure 2: relationships
+    # ------------------------------------------------------------------
+    fig, axes = plt.subplots(1, 4, figsize=(22, 5))
+    have_both = "arm_meff_w" in data and "arm_lam_w" in data
+
+    # a) m_eff vs Lambda (window max)
+    ax = axes[0]
+    if have_both:
+        a = data["arm_meff_w"]["win_max_all"]
+        b = data["arm_lam_w"]["win_max_all"]
+        ok = np.isfinite(a) & np.isfinite(b)
+        corr = float(np.corrcoef(a[ok], b[ok])[0, 1]) if ok.sum() > 2 else float("nan")
+        ax.scatter(b[ok], a[ok], s=10, alpha=0.4)
+        ax.set_xlabel("window max mean $\\Lambda_{ii}$ [kg]")
+        ax.set_ylabel("window max $m_{eff}$ [kg]")
+        ax.set_title(f"m_eff vs Lambda   corr = {corr:+.3f}")
+        print(f"\n  corr(window max m_eff, window max Lambda) = {corr:+.4f}")
+        print("     m_eff depends on the push direction; lam_mean does not. Near 1.0 "
+              "means\n     the direction adds little beyond the overall inertia level.")
+        if log_scale:
+            ax.set_xscale("log"); ax.set_yscale("log")
+    else:
+        ax.text(0.5, 0.5, "need both channels", ha="center", transform=ax.transAxes)
+
+    # b) arm inertia vs object mass
+    ax = axes[1]
+    if "arm_meff_w" in data and "gt_mass" in df.columns:
+        mm = data["arm_meff_w"]["win_max_all"]
+        gm = df["gt_mass"].values.astype(np.float64)
+        ok = np.isfinite(mm)
+        ratio = mm[ok] / np.maximum(gm[ok], 1e-9)
+        sns.histplot(ratio, kde=True, ax=ax, color="tab:green", log_scale=True)
+        ax.axvline(1.0, color="k", linestyle="--", linewidth=1)
+        ax.set_xlabel("m_eff (window max) / gt_mass")
+        ax.set_title("Arm inertia relative to object mass")
+        print(f"  m_eff / gt_mass: median {np.median(ratio):.2f}, "
+              f"{100 * (ratio > 1).mean():.1f}% of rows above 1")
+        print("     Above 1, the arm's own inertia along the push exceeds the object's "
+              "mass,\n     so the velocity dip at impact carries a diluted mass signal.")
+
+    # c) m_eff vs directional manipulability
+    ax = axes[2]
+    wd_cols = window_cols(df, "arm_dir_manip_w")
+    if "arm_meff_w" in data and wd_cols:
+        mm = data["arm_meff_w"]["win_max_all"]
+        wd_min = df[wd_cols].values.astype(np.float64).min(axis=1)
+        ok = np.isfinite(mm) & np.isfinite(wd_min)
+        corr = float(np.corrcoef(mm[ok], wd_min[ok])[0, 1]) if ok.sum() > 2 else float("nan")
+        ax.scatter(wd_min[ok], mm[ok], s=10, alpha=0.4, color="tab:purple")
+        ax.set_xlabel("window min $w_{dir}$")
+        ax.set_ylabel("window max $m_{eff}$ [kg]")
+        ax.set_title(f"Inertial vs kinematic   corr = {corr:+.3f}")
+        print(f"  corr(window max m_eff, window min w_dir) = {corr:+.4f}")
+        print("     Near +/-1 means m_eff is largely a relabelling of w_dir; low |corr| "
+              "means\n     the inertial channel carries information the kinematic one "
+              "does not.")
+        if log_scale:
+            ax.set_yscale("log")
+    else:
+        ax.text(0.5, 0.5, "arm_dir_manip_w* missing", ha="center",
+                transform=ax.transAxes)
+
+    # d) one row: velocity with both inertial channels
+    ax = axes[3]
+    good_all = np.logical_and.reduce([d["good"] for d in data.values()])
+    if good_all.any() and vel_cols:
+        i = int(np.flatnonzero(good_all)[len(np.flatnonzero(good_all)) // 2])
+        steps = np.arange(T_vel)
+        ax.plot(steps, df[vel_cols].iloc[i].values.astype(float), color="tab:blue",
+                linewidth=2, label="velocity")
+        ax.set_ylabel("v [m/s]", color="tab:blue")
+        ax2 = ax.twinx()
+        for pfx, d in data.items():
+            _, _, color = INERTIAL_CHANNELS[pfx]
+            ax2.plot(np.arange(d["W"].shape[1]), d["W"][i], color=color,
+                     linewidth=1.6, label=pfx[:-2])
+        ax2.set_ylabel("inertia [kg]")
+        ax2.grid(False)
+        if log_scale:
+            ax2.set_yscale("log")
+        h1, l1 = ax.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax.legend(h1 + h2, l1 + l2, fontsize=8, loc="lower right")
+        gm = df['gt_mass'].iloc[i] if 'gt_mass' in df.columns else float('nan')
+        ax.set_title(f"row {i}  (m_obj={gm:.3f} kg)")
+        ax.set_xlabel("Window step")
+
+    fig.suptitle("How the inertial channels relate to each other, the object, "
+                 "and w_dir", fontsize=14, fontweight="bold")
     plt.tight_layout()
     plt.show()
     print("=" * 70 + "\n")
@@ -998,6 +1326,7 @@ def main():
         visualize_all_variants(df, standardize=False)
         report_variant_window(df)
         compare_variant_channels(df)
+        report_inertial_window(df, log_scale=False)
     
     # We only need the DataFrame filtered by domain for this script
     _, _, seq_len, df_filtered, _ = create_dataloaders(

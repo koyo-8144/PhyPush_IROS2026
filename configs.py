@@ -71,6 +71,25 @@ MULTI_ANGLE = True
 #                        sequence, as a second input channel.
 #                        input_dim=2, cond_dim=0
 #
+#   "vel_osim_seq"       + the 60-step OPERATIONAL-SPACE INERTIA sequence,
+#                        as a second input channel. The CSV stores one
+#                        scalar per step (arm_lam_w*): the mean of the
+#                        translational diagonal of
+#                        Lambda = (J M^-1 J^T)^-1, not the full 6x6 matrix.
+#                        input_dim=2, cond_dim=0
+#
+#   "vel_eff_seq"        + the 60-step EFFECTIVE MASS sequence along the
+#                        push direction u, m_eff = 1 / (u^T Lambda^-1 u)
+#                        (arm_meff_w*), as a second input channel.
+#                        input_dim=2, cond_dim=0
+#
+# The two inertial channels are LOG-transformed before standardization
+# (VARIANT_LOG_TRANSFORM). Lambda is a matrix inverse and becomes heavy-tailed
+# near kinematic singularities; a single linear mean/std would let a few such
+# rows set the scale for everything else. Rows with a non-positive or
+# non-finite value in the channel (a failed solve, written as 0.0 by the
+# collector) are dropped for these variants.
+#
 # Note on the two scalar variants: the minimum is taken over the 60-step
 # INFERENCE WINDOW, recomputed here from arm_manip_w* / arm_dir_manip_w*. It is
 # NOT the `worst_manipulability` / `worst_dir_manipulability` column, which is
@@ -78,30 +97,33 @@ MULTI_ANGLE = True
 # post-impact). Taking it over the window keeps all four variants describing the
 # same slice of time as the velocity input, so they are comparable.
 # =============================================================================
+# INPUT_VARIANT = "vel_only"
 # INPUT_VARIANT = "vel_manip_cond"
 # INPUT_VARIANT = "vel_dirmanip_cond"
 # INPUT_VARIANT = "vel_manip_seq"
 # INPUT_VARIANT = "vel_dirmanip_seq"
-INPUT_VARIANT = "vel_only"
+INPUT_VARIANT = "vel_osim_seq"
+# INPUT_VARIANT = "vel_eff_seq"
 
-_VARIANTS = ("vel_only", "vel_manip_cond", "vel_dirmanip_cond",
-             "vel_manip_seq", "vel_dirmanip_seq")
-if INPUT_VARIANT not in _VARIANTS:
+# Single source of truth for every variant.
+#   name -> (window column prefix, cond_dim, input_dim, log-transform channel)
+VARIANT_TABLE = {
+    "vel_only":          (None,              0, 1, False),
+    "vel_manip_cond":    ("arm_manip_w",     1, 1, False),
+    "vel_dirmanip_cond": ("arm_dir_manip_w", 1, 1, False),
+    "vel_manip_seq":     ("arm_manip_w",     0, 2, False),
+    "vel_dirmanip_seq":  ("arm_dir_manip_w", 0, 2, False),
+    "vel_osim_seq":      ("arm_lam_w",       0, 2, True),
+    "vel_eff_seq":       ("arm_meff_w",      0, 2, True),
+}
+_VARIANTS = tuple(VARIANT_TABLE)
+if INPUT_VARIANT not in VARIANT_TABLE:
     raise ValueError(f"Unknown INPUT_VARIANT {INPUT_VARIANT!r}. Expected one of {_VARIANTS}.")
 
 # Derived, so train.py / evaluate.py never hardcode these.
+(VARIANT_WINDOW_PREFIX, COND_DIM, INPUT_DIM,
+ VARIANT_LOG_TRANSFORM) = VARIANT_TABLE[INPUT_VARIANT]
 USE_ARM_STATE = INPUT_VARIANT != "vel_only"
-COND_DIM = 1 if INPUT_VARIANT in ("vel_manip_cond", "vel_dirmanip_cond") else 0
-INPUT_DIM = 2 if INPUT_VARIANT in ("vel_manip_seq", "vel_dirmanip_seq") else 1
-
-# Which per-step window column family each variant draws from.
-VARIANT_WINDOW_PREFIX = {
-    "vel_only":          None,
-    "vel_manip_cond":    "arm_manip_w",
-    "vel_dirmanip_cond": "arm_dir_manip_w",
-    "vel_manip_seq":     "arm_manip_w",
-    "vel_dirmanip_seq":  "arm_dir_manip_w",
-}[INPUT_VARIANT]
 
 # Kept for backwards compatibility with older sidecars / scripts that still read
 # ARM_FEATURE_MODE. It now just mirrors the variant.
@@ -112,7 +134,9 @@ if FRAME_MODE == "world":
     CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_tb-3_ta57_emavel1.0_velstd0.0_broad.csv"
 elif FRAME_MODE == "local":
     if MULTI_ANGLE:
-        CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper_multi_angle_sb3.csv"
+        CSV_PATH = ("/home/psxkf4/IsaacLab/source/collected_data/"
+                    "data_cube_closed_gripper_multi_angle_sb3_open/"
+                    "data_cube_closed_gripper_multi_angle_sb3_open.csv")
     else:
         CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper.csv"
 
@@ -188,6 +212,8 @@ config_multi_angle = {
     'arm_feature_mode': ARM_FEATURE_MODE,
     'cond_dim': COND_DIM,
     'input_dim': INPUT_DIM,
+    'variant_window_prefix': VARIANT_WINDOW_PREFIX,
+    'variant_log_transform': VARIANT_LOG_TRANSFORM,
     'max_push_lateral_offset': MAX_PUSH_LATERAL_OFFSET,
     'max_push_com_offset': MAX_PUSH_COM_OFFSET,
 }
