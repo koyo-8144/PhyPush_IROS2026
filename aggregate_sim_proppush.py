@@ -49,12 +49,12 @@ MODELS_TO_COMPARE = {
             "draw_thick_line": "No",
     },
     r"PhyPush osim seq input": {
-                "path": os.path.join(BASE_RUN_DIR, "20260916_114512", f"pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq/{csv_file}"),
+                "path": os.path.join(BASE_RUN_DIR, "20260916_195532", f"pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq/{csv_file}"),
                 "force_input": "No",
                 "draw_thick_line": "No",
     },
     r"PhyPush eff mass seq input": {
-                "path": os.path.join(BASE_RUN_DIR, "20260916_124518", f"pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq/{csv_file}"),
+                "path": os.path.join(BASE_RUN_DIR, "20260916_231604", f"pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq/{csv_file}"),
                 "force_input": "No",
                 "draw_thick_line": "No",
     },

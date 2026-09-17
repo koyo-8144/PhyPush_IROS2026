@@ -271,7 +271,6 @@ def report_multi_angle_coverage(df):
                       "failures at those orientations, since _save_offline_data_csv "
                       "drops rows where push_start/end were not reached.")
 
-    breakpoint()
 
     if {'seed', 'env_id'}.issubset(df.columns):
         groups = df['seed'].astype(int) * 100000 + df['env_id'].astype(int)

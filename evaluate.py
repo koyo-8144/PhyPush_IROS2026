@@ -44,10 +44,10 @@ if MULTI_ANGLE:
         time = "20260913_124812"
         model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"
     elif INPUT_VARIANT == "vel_osim_seq":
-        time = "20260916_114512"
+        time = "20260916_195532"
         model = "pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq"
     elif INPUT_VARIANT == "vel_eff_seq":
-        time = "20260916_124518"
+        time = "20260916_231604"
         model = "pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq"
 else:
     time = "20260811_063229"

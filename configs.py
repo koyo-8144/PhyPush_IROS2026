@@ -97,13 +97,13 @@ MULTI_ANGLE = True
 # post-impact). Taking it over the window keeps all four variants describing the
 # same slice of time as the velocity input, so they are comparable.
 # =============================================================================
-# INPUT_VARIANT = "vel_only"
+INPUT_VARIANT = "vel_only"
 # INPUT_VARIANT = "vel_manip_cond"
 # INPUT_VARIANT = "vel_dirmanip_cond"
 # INPUT_VARIANT = "vel_manip_seq"
 # INPUT_VARIANT = "vel_dirmanip_seq"
 # INPUT_VARIANT = "vel_osim_seq"
-INPUT_VARIANT = "vel_eff_seq"
+# INPUT_VARIANT = "vel_eff_seq"
 
 # Single source of truth for every variant.
 #   name -> (window column prefix, cond_dim, input_dim, log-transform channel)
@@ -135,8 +135,8 @@ if FRAME_MODE == "world":
 elif FRAME_MODE == "local":
     if MULTI_ANGLE:
         CSV_PATH = ("/home/psxkf4/IsaacLab/source/collected_data/"
-                    "data_cube_closed_gripper_multi_angle_sb3_open/"
-                    "data_cube_closed_gripper_multi_angle_sb3_open.csv")
+                    "data_cube_closed_gripper_multi_angle_sb3/"
+                    "data_cube_closed_gripper_multi_angle_sb3.csv")
     else:
         CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper.csv"
 
