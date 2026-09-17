@@ -132,7 +132,7 @@ def main():
     # ==========================================
     # 2. PATHS & SAVING CONFIG
     # ==========================================
-    train_from = "from_20260913"
+    train_from = "from_20260917"
     current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     
     training_model = build_model_string(config) 
