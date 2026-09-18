@@ -29,21 +29,21 @@ TOP_NUM = 10
 
 if MULTI_ANGLE:
     if GRIPPER_CLOSED:
-        gripper_folder_name = "closed_gripper"
+        gripper_folder_name = "gripper_closed"
         if INPUT_VARIANT == "vel_only":
-                time = "20260913_134633"
+                time = "20260917_191033"
                 model = "pinn_pcri-L1_p5c10.0_multiangle"
         elif INPUT_VARIANT == "vel_manip_cond":
-            time = "20260913_102210"
+            time = "20260917_220336"
             model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond"
         elif INPUT_VARIANT == "vel_dirmanip_cond":
-            time = "20260913_110510"
+            time = "20260918_000726"
             model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond"
         elif INPUT_VARIANT == "vel_manip_seq":
-            time = "20260913_120624"
+            time = "20260918_004750"
             model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq"
         elif INPUT_VARIANT == "vel_dirmanip_seq":
-            time = "20260913_124812"
+            time = "20260918_021512"
             model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"
         elif INPUT_VARIANT == "vel_osim_seq":
             time = "20260916_195532"
@@ -52,10 +52,25 @@ if MULTI_ANGLE:
             time = "20260916_231604"
             model = "pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq"
     else:
-        gripper_folder_name = "opened_gripper"
-        if INPUT_VARIANT == "vel_osim_seq":
-                time = "20260917_144436"
-                model = "pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq"
+        gripper_folder_name = "gripper_opened"
+        if INPUT_VARIANT == "vel_only":
+            time = ""
+            model = "pinn_pcri-L1_p5c10.0_multiangle"
+        elif INPUT_VARIANT == "vel_manip_cond":
+            time = "20260917_220336"
+            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond"
+        elif INPUT_VARIANT == "vel_dirmanip_cond":
+            time = "20260918_000726"
+            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond"
+        elif INPUT_VARIANT == "vel_manip_seq":
+            time = "20260918_004750"
+            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq"
+        elif INPUT_VARIANT == "vel_dirmanip_seq":
+            time = "20260918_021512"
+            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"
+        elif INPUT_VARIANT == "vel_osim_seq":
+            time = "20260917_144436"
+            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq"
         elif INPUT_VARIANT == "vel_eff_seq":
             time = "20260917_153423"
             model = "pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq"
@@ -68,7 +83,7 @@ if time.startswith("<"):
         f"evaluate.py: no trained run is set for INPUT_VARIANT='{INPUT_VARIANT}'. "
         f"Train it, then put its run timestamp in the path table above.")
 
-train_from = "from_20260917"
+train_from = "from_20260916"
 
 CHECKPOINT_DIR = f"./results/checkpoints/{train_from}/{gripper_folder_name}/{time}/{model}"
 

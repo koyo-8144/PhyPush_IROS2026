@@ -97,15 +97,15 @@ MULTI_ANGLE = True
 # post-impact). Taking it over the window keeps all four variants describing the
 # same slice of time as the velocity input, so they are comparable.
 # =============================================================================
-# INPUT_VARIANT = "vel_only"
+INPUT_VARIANT = "vel_only"
 # INPUT_VARIANT = "vel_manip_cond"
 # INPUT_VARIANT = "vel_dirmanip_cond"
 # INPUT_VARIANT = "vel_manip_seq"
-INPUT_VARIANT = "vel_dirmanip_seq"
+# INPUT_VARIANT = "vel_dirmanip_seq"
 # INPUT_VARIANT = "vel_osim_seq"
 # INPUT_VARIANT = "vel_eff_seq"
 
-GRIPPER_CLOSED = True
+GRIPPER_CLOSED =False
 
 # Single source of truth for every variant.
 #   name -> (window column prefix, cond_dim, input_dim, log-transform channel)

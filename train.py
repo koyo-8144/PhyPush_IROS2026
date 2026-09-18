@@ -132,11 +132,11 @@ def main():
     # ==========================================
     # 2. PATHS & SAVING CONFIG
     # ==========================================
-    train_from = "from_20260917"
+    train_from = "from_20260916"
     if GRIPPER_CLOSED:
-        gripper = "closed_gripper"
+        gripper = "gripper_closed"
     else:
-        gripper = "opened_gripper"
+        gripper = "gripper_opened"
     current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     
     training_model = build_model_string(config) 

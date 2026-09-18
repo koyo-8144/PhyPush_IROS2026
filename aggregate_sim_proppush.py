@@ -10,11 +10,11 @@ OUTPUT_DIR = "results/paper/sim"
 ABLATION_DIR = os.path.join(OUTPUT_DIR, "ablation")
 PHYSICS_DIR = os.path.join(OUTPUT_DIR, "physics_fidelity")
 
-train_from = "from_20260917"
+train_from = "from_20260916"
 if GRIPPER_CLOSED:
-    gripper_folder_name = "closed_gripper"
+    gripper_folder_name = "gripper_closed"
 else:
-    gripper_folder_name = "opened_gripper"
+    gripper_folder_name = "gripper_opened"
 BASE_RUN_DIR = f"/home/psxkf4/PhyPush/results/checkpoints/{train_from}/{gripper_folder_name}"
 
 csv_file = "domain_evaluation_summary.csv"
@@ -27,28 +27,28 @@ MODELS_TO_COMPARE = {
             "draw_thick_line": "No",
     },
     r"PhyPush EE vel seq input only~\cite{}": {
-            "path": os.path.join(BASE_RUN_DIR, "20260913_134633", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
+            "path": os.path.join(BASE_RUN_DIR, "20260917_191033", f"pinn_pcri-L1_p5c10.0_multiangle/{csv_file}"),
             "force_input": "No",
             "draw_thick_line": "Yes",
     },
     # ---------------------------------- PhyPush ----------------------------------
     r"PhyPush worst manip cond": {
-            "path": os.path.join(BASE_RUN_DIR, "20260913_102210", f"pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond/{csv_file}"),
+            "path": os.path.join(BASE_RUN_DIR, "20260917_220336", f"pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond/{csv_file}"),
             "force_input": "No",
             "draw_thick_line": "No",
     },
     r"PhyPush worst dir manip cond": {
-            "path": os.path.join(BASE_RUN_DIR, "20260913_110510", f"pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond/{csv_file}"),
+            "path": os.path.join(BASE_RUN_DIR, "20260918_000726", f"pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond/{csv_file}"),
             "force_input": "No",
             "draw_thick_line": "No",
     },
     r"PhyPush manip seq input": {
-            "path": os.path.join(BASE_RUN_DIR, "20260913_120624", f"pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq/{csv_file}"),
+            "path": os.path.join(BASE_RUN_DIR, "20260918_004750", f"pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq/{csv_file}"),
             "force_input": "No",
             "draw_thick_line": "No",
     },
     r"PhyPush dir manip seq input": {
-            "path": os.path.join(BASE_RUN_DIR, "20260913_124812", f"pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq/{csv_file}"),
+            "path": os.path.join(BASE_RUN_DIR, "20260918_021512", f"pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq/{csv_file}"),
             "force_input": "No",
             "draw_thick_line": "No",
     },
@@ -62,6 +62,8 @@ MODELS_TO_COMPARE = {
                 "force_input": "No",
                 "draw_thick_line": "No",
     },
+
+
     # # ---------------------------------- PropPush ----------------------------------
     # r"PropPush EE vel seq input only": {
     #         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_only.csv",
