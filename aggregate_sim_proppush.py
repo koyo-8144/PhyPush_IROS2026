@@ -1,7 +1,7 @@
 import pandas as pd
 import os
 import numpy as np
-from configs import INCLUDE_UNSEEN
+from configs import INCLUDE_UNSEEN, GRIPPER_CLOSED
 
 # ==========================================
 # 1. CONFIGURATION & PATHS
@@ -10,8 +10,12 @@ OUTPUT_DIR = "results/paper/sim"
 ABLATION_DIR = os.path.join(OUTPUT_DIR, "ablation")
 PHYSICS_DIR = os.path.join(OUTPUT_DIR, "physics_fidelity")
 
-
-BASE_RUN_DIR = "/home/psxkf4/PhyPush/results/checkpoints/from_20260913"
+train_from = "from_20260917"
+if GRIPPER_CLOSED:
+    gripper_folder_name = "closed_gripper"
+else:
+    gripper_folder_name = "opened_gripper"
+BASE_RUN_DIR = f"/home/psxkf4/PhyPush/results/checkpoints/{train_from}/{gripper_folder_name}"
 
 csv_file = "domain_evaluation_summary.csv"
 MODELS_TO_COMPARE = {

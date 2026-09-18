@@ -18,37 +18,47 @@ from utils import set_seed, clean_force_col
 from configs import (M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN,
                      M_UNSEEN_MAX, MU_UNSEEN_MAX, GLOBAL_M_RANGE, GLOBAL_MU_RANGE,
                      GLOBAL_FRIC_RANGE, REAL_M_RANGE, REAL_MU_RANGE, REAL_FRIC_RANGE,
-                     INCLUDE_UNSEEN, CSV_PATH, G, MULTI_ANGLE)
+                     INCLUDE_UNSEEN, CSV_PATH, G, MULTI_ANGLE, GRIPPER_CLOSED)
 
 # ==========================================
 # 1. CONFIGURATION & PATHS
 # ==========================================
 PLOT_SHOW = False
-SMOOTHING_WINDOW_SIZE = 3
+# SMOOTHING_WINDOW_SIZE = 3
 TOP_NUM = 10
 
 if MULTI_ANGLE:
-    if INPUT_VARIANT == "vel_only":
-            time = "20260913_134633"
-            model = "pinn_pcri-L1_p5c10.0_multiangle"
-    elif INPUT_VARIANT == "vel_manip_cond":
-        time = "20260913_102210"
-        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond"
-    elif INPUT_VARIANT == "vel_dirmanip_cond":
-        time = "20260913_110510"
-        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond"
-    elif INPUT_VARIANT == "vel_manip_seq":
-        time = "20260913_120624"
-        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq"
-    elif INPUT_VARIANT == "vel_dirmanip_seq":
-        time = "20260913_124812"
-        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"
-    elif INPUT_VARIANT == "vel_osim_seq":
-        time = "20260916_195532"
-        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq"
-    elif INPUT_VARIANT == "vel_eff_seq":
-        time = "20260916_231604"
-        model = "pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq"
+    if GRIPPER_CLOSED:
+        gripper_folder_name = "closed_gripper"
+        if INPUT_VARIANT == "vel_only":
+                time = "20260913_134633"
+                model = "pinn_pcri-L1_p5c10.0_multiangle"
+        elif INPUT_VARIANT == "vel_manip_cond":
+            time = "20260913_102210"
+            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond"
+        elif INPUT_VARIANT == "vel_dirmanip_cond":
+            time = "20260913_110510"
+            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond"
+        elif INPUT_VARIANT == "vel_manip_seq":
+            time = "20260913_120624"
+            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq"
+        elif INPUT_VARIANT == "vel_dirmanip_seq":
+            time = "20260913_124812"
+            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"
+        elif INPUT_VARIANT == "vel_osim_seq":
+            time = "20260916_195532"
+            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq"
+        elif INPUT_VARIANT == "vel_eff_seq":
+            time = "20260916_231604"
+            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq"
+    else:
+        gripper_folder_name = "opened_gripper"
+        if INPUT_VARIANT == "vel_osim_seq":
+                time = "20260917_144436"
+                model = "pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq"
+        elif INPUT_VARIANT == "vel_eff_seq":
+            time = "20260917_153423"
+            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq"
 else:
     time = "20260811_063229"
     model = "pinn_pcri-L1_p5c10.0"
@@ -58,7 +68,9 @@ if time.startswith("<"):
         f"evaluate.py: no trained run is set for INPUT_VARIANT='{INPUT_VARIANT}'. "
         f"Train it, then put its run timestamp in the path table above.")
 
-CHECKPOINT_DIR = f"./results/checkpoints/from_20260913/{time}/{model}"
+train_from = "from_20260917"
+
+CHECKPOINT_DIR = f"./results/checkpoints/{train_from}/{gripper_folder_name}/{time}/{model}"
 
 WEIGHTS_PATH = os.path.join(CHECKPOINT_DIR, "transformer_epoch1000.pth")
 CONFIG_PATH = os.path.join(CHECKPOINT_DIR, "config.json")

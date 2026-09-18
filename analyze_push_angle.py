@@ -38,13 +38,19 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import cm, colors as mcolors
 from sklearn.model_selection import GroupShuffleSplit
+from configs import GRIPPER_CLOSED
 
 # ==========================================
 # 1. CONFIGURATION
 # ==========================================
+if GRIPPER_CLOSED:
+    csv_folder_name = "data_cube_closed_gripper_multi_angle_sb3"
+else:
+    csv_folder_name = "data_cube_opened_gripper_multi_angle_sb3"
+
 CSV_PATH = os.environ.get(
     "CSV_PATH",
-    "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper_multi_angle_sb3.csv")
+    f"/home/psxkf4/IsaacLab/source/collected_data/{csv_folder_name}/{csv_folder_name}.csv")
 
 TRANS_BASE = os.environ.get("TRANS_BASE", "/home/psxkf4/PhyPush/results/checkpoints/from_20260913")
 
@@ -79,22 +85,52 @@ MAX_PUSH_LATERAL_OFFSET = 0.005
 MAX_PUSH_COM_OFFSET = 0.05
 
 #   variant -> (window prefix, cond_dim, input_dim, run_time, model_string)
-VARIANT_SPEC = {
-    "vel_only": (
-        None, 0, 1, "20260913_134633", "pinn_pcri-L1_p5c10.0_multiangle"),
-    "vel_manip_cond": (
-        "arm_manip_w", 1, 1, "20260913_102210",
-        "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond"),
-    "vel_dirmanip_cond": (
-        "arm_dir_manip_w", 1, 1, "20260913_110510",
-        "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond"),
-    "vel_manip_seq": (
-        "arm_manip_w", 0, 2, "20260913_120624",
-        "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq"),
-    "vel_dirmanip_seq": (
-        "arm_dir_manip_w", 0, 2, "20260913_124812",
-        "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"),
-}
+if GRIPPER_CLOSED:
+    VARIANT_SPEC = {
+        "vel_only": (
+            None, 0, 1, "20260913_134633", "pinn_pcri-L1_p5c10.0_multiangle"),
+        "vel_manip_cond": (
+            "arm_manip_w", 1, 1, "20260913_102210",
+            "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond"),
+        "vel_dirmanip_cond": (
+            "arm_dir_manip_w", 1, 1, "20260913_110510",
+            "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond"),
+        "vel_manip_seq": (
+            "arm_manip_w", 0, 2, "20260913_120624",
+            "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq"),
+        "vel_dirmanip_seq": (
+            "arm_dir_manip_w", 0, 2, "20260913_124812",
+            "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"),
+        "vel_osim_seq": (
+            "arm_lam_w", 0, 2, "20260916_195532",
+            "pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq"),
+        "vel_eff_seq": (
+            "arm_dir_manip_w", 0, 2, "20260916_231604",
+            "pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq"),
+    }
+else:
+    VARIANT_SPEC = {
+        # "vel_only": (
+        #     None, 0, 1, "20260913_134633", "pinn_pcri-L1_p5c10.0_multiangle"),
+        # "vel_manip_cond": (
+        #     "arm_manip_w", 1, 1, "20260913_102210",
+        #     "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond"),
+        # "vel_dirmanip_cond": (
+        #     "arm_dir_manip_w", 1, 1, "20260913_110510",
+        #     "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond"),
+        # "vel_manip_seq": (
+        #     "arm_manip_w", 0, 2, "20260913_120624",
+        #     "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq"),
+        # "vel_dirmanip_seq": (
+        #     "arm_dir_manip_w", 0, 2, "20260913_124812",
+        #     "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"),
+        "vel_osim_seq": (
+            "arm_lam_w", 0, 2, "20260917_144436",
+            "pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq"),
+        "vel_eff_seq": (
+            "arm_meff_w", 0, 2, "20260917_153423",
+            "pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq"),
+    }
 
 VARIANT_LABEL = {
     "vel_only":          r"vel only",

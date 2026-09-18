@@ -938,6 +938,154 @@ def report_inertial_window(df, num_samples=6, log_scale=False):
     plt.show()
     print("=" * 70 + "\n")
 
+
+# =============================================================================
+# CHANNEL INFORMATIVENESS  (why a variant can collapse)
+#
+# A variant's second input channel is standardized with ONE mean/std computed
+# over the whole sweep: z = (x - mean) / std, on log(x) for the inertial
+# channels. Two things follow, and both are checked here:
+#
+#   1. If the channel barely varies in training, std is tiny and it carries no
+#      information about the object -- every push looks the same to the model.
+#   2. A tiny std also AMPLIFIES any sim-to-real offset: a real value d in log
+#      units lands at z = d / std. With std = 0.0097, a 10% higher real value
+#      (d = log 1.1 = 0.0953) lands at z = +9.8, far outside anything seen in
+#      training, and the model saturates.
+#
+# The variance split says WHERE what little variation there is comes from:
+#   within-push   variation across the 60 steps of one push
+#   between-push  variation of the per-push means
+# A channel that is flat within a push AND flat between pushes is a constant.
+# =============================================================================
+INFORMATIVENESS_OFFSETS = (0.05, 0.10, 0.28)     # relative offsets to price in z
+
+
+def report_channel_informativeness(df, min_rel_std=0.02):
+    print("\n" + "=" * 78)
+    print(" CHANNEL INFORMATIVENESS AND SENSITIVITY")
+    print("=" * 78)
+    print("  Values are in MODEL SPACE: log(x) for the inertial channels "
+          "(arm_meff_w, arm_lam_w),\n  raw for the manipulability channels.")
+
+    prefixes = sorted({p for p in ALL_VARIANTS.values() if p is not None})
+    rows = []
+    for pfx in prefixes:
+        W, valid, cols = variant_window(df, prefix=pfx,
+                                        log_transform=pfx in LOG_PREFIXES)
+        if not cols:
+            print(f"\n  [{pfx}*] no columns in this CSV; skipped.")
+            continue
+        W = np.asarray(W, dtype=np.float64)[valid]
+        if len(W) == 0:
+            print(f"\n  [{pfx}*] no valid rows; skipped.")
+            continue
+        is_log = pfx in LOG_PREFIXES
+
+        mean = float(W.mean())
+        std = float(W.std())                  # what save_arm_stats stores
+        # Relative variation, comparable across channels: for a log channel the
+        # std IS the relative spread (exp(std) - 1); for a raw one it is std/|mean|.
+        # std/|mean| in log space would depend on the arbitrary log offset.
+        rel = (np.exp(std) - 1.0) if is_log else std / max(abs(mean), 1e-12)
+
+        # Variance split. Within = spread across the 60 steps of one push;
+        # between = spread of the per-push means.
+        row_mean = W.mean(axis=1)
+        within = float(np.mean(W.std(axis=1)))
+        between = float(row_mean.std())
+
+        print(f"\n  [{pfx}*]   {'log space' if is_log else 'raw'}   "
+              f"N={len(W)} pushes x {W.shape[1]} steps")
+        print(f"    standardization  mean {mean:+.6f}   std {std:.6f}   "
+              f"relative variation {100 * rel:.2f}%")
+        if is_log:
+            # exp(mean) is the geometric mean in kg; exp(std)-1 the typical
+            # relative variation the channel actually shows.
+            print(f"    in kg            geometric mean {np.exp(mean):.4f} kg,  "
+                  f"typical variation +/-{100 * (np.exp(std) - 1):.2f}%")
+        print(f"    variance split   within-push {within:.6f}   "
+              f"between-push {between:.6f}   "
+              f"(between/within {between / max(within, 1e-12):.2f})")
+
+        # How far a sim-to-real offset lands, in training z units.
+        amp = 1.0 / max(std, 1e-12)
+        if is_log:
+            shifts = ", ".join(f"+{100 * o:.0f}% -> z={np.log1p(o) * amp:+.1f}"
+                               for o in INFORMATIVENESS_OFFSETS)
+        else:
+            shifts = ", ".join(f"+{100 * o:.0f}% -> z={o * abs(mean) * amp:+.1f}"
+                               for o in INFORMATIVENESS_OFFSETS)
+        print(f"    offset -> z      {shifts}")
+        unit = "1.0 in log space (a factor of e)" if is_log else "1.0 raw"
+        print(f"    amplification    {unit} = {amp:.1f} z")
+
+        # Does the channel say anything about the object? It should not: the arm
+        # follows the same trajectory whatever is on the table. A near-zero
+        # correlation with gt_mass is expected and is the point -- the channel is
+        # supposed to describe the ARM, not the object.
+        for tgt in ("gt_mass", "gt_mu", "obj_yaw_base"):
+            if tgt not in df.columns:
+                continue
+            t = df[tgt].values.astype(np.float64)[valid]
+            if t.std() > 0 and row_mean.std() > 0:
+                c = float(np.corrcoef(row_mean, t)[0, 1])
+                print(f"    corr with {tgt:<13} {c:+.3f}")
+
+        flat = rel < min_rel_std
+        if flat:
+            print(f"    [WARNING] nearly CONSTANT in training "
+                  f"(varies {100 * rel:.2f}% < {100 * min_rel_std:.0f}%).")
+            print(f"              The model sees the same value for every push, so this")
+            print(f"              channel adds no information, and standardizing divides")
+            print(f"              by {std:.5f}: a {100 * INFORMATIVENESS_OFFSETS[-1]:.0f}% "
+                  f"sim-to-real offset arrives at "
+                  f"z={np.log1p(INFORMATIVENESS_OFFSETS[-1]) * amp if is_log else INFORMATIVENESS_OFFSETS[-1] * abs(mean) * amp:+.0f},")
+            print(f"              which saturates the model and collapses its output.")
+
+        # Where the variation lives across the sweep. The pushes ARE multi-angle,
+        # so if a channel is meant to describe the arm's configuration it should
+        # vary between collect_idx / yaw groups. A channel that is flat BETWEEN
+        # angles as well as within a push is constant for the whole dataset.
+        for key in ("collect_idx", "push_face_index"):
+            if key not in df.columns:
+                continue
+            grp = pd.Series(row_mean).groupby(df[key].values[valid])
+            gm = grp.mean()
+            print(f"    across {key:<16} spread {gm.std():.6f} "
+                  f"(range {gm.max() - gm.min():.6f}, "
+                  f"{100 * (np.exp(gm.max() - gm.min()) - 1) if is_log else 100 * (gm.max() - gm.min()) / max(abs(mean), 1e-12):.2f}% "
+                  f"between the extreme groups)")
+            print(f"      per-group means: "
+                  + ", ".join(f"{k}:{v:.4f}" for k, v in gm.items()))
+        if 'obj_yaw_base' in df.columns:
+            yaw = np.degrees(df['obj_yaw_base'].values[valid])
+            if row_mean.std() > 0:
+                print(f"    corr with yaw_deg      "
+                      f"{float(np.corrcoef(row_mean, yaw)[0, 1]):+.3f}")
+
+        rows.append((pfx, mean, std, rel, within, between, amp, flat))
+
+
+
+    if len(rows) > 1:
+        print("\n  " + "-" * 74)
+        print(f"  {'channel':<18}{'std':>10}{'variation':>12}{'within':>10}"
+              f"{'between':>10}{'x amplif':>10}")
+        for pfx, mean, std, rel, within, between, amp, flat in rows:
+            print(f"  {pfx:<18}{std:>10.5f}{100 * rel:>11.2f}%{within:>10.5f}"
+                  f"{between:>10.5f}{amp:>10.0f}"
+                  + ("   <-- flat" if flat else ""))
+        least = min(rows, key=lambda r: r[3])
+        most = max(rows, key=lambda r: r[3])
+        print(f"\n  Most variation: {most[0]} ({100 * most[3]:.2f}%).  "
+              f"Least: {least[0]} ({100 * least[3]:.2f}%), "
+              f"{most[3] / max(least[3], 1e-12):.0f}x flatter.")
+        print("  A flatter channel is both less informative and more fragile: the same")
+        print("  real-world offset arrives that many times further out in z.")
+    print("=" * 78 + "\n")
+
+
 # =============================================================================
 # PER-PLOT NUMERIC ANALYSIS
 # =============================================================================
@@ -1406,6 +1554,7 @@ def main():
         report_variant_window(df)
         compare_variant_channels(df)
         report_inertial_window(df, log_scale=False)
+        report_channel_informativeness(df)
     
     # We only need the DataFrame filtered by domain for this script
     _, _, seq_len, df_filtered, _ = create_dataloaders(

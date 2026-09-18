@@ -14,7 +14,7 @@ from utils import set_seed, build_model_string, clean_force_col
 from models import PhysicsTransformerEstimator
 from losses import log_mse_loss, PinnLossCalculator
 from dataset import create_dataloaders, load_dataset_csv
-from configs import used_config, CSV_PATH, INPUT_VARIANT, COND_DIM, INPUT_DIM
+from configs import used_config, CSV_PATH, INPUT_VARIANT, COND_DIM, INPUT_DIM, GRIPPER_CLOSED
 
 
 def main():
@@ -133,12 +133,16 @@ def main():
     # 2. PATHS & SAVING CONFIG
     # ==========================================
     train_from = "from_20260917"
+    if GRIPPER_CLOSED:
+        gripper = "closed_gripper"
+    else:
+        gripper = "opened_gripper"
     current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     
     training_model = build_model_string(config) 
     parent_results_dir = "./results"
     
-    checkpoint_dir = os.path.join(parent_results_dir, "checkpoints", f"{train_from}", f"{current_time}", training_model)
+    checkpoint_dir = os.path.join(parent_results_dir, "checkpoints", f"{train_from}", f"{gripper}", f"{current_time}", training_model)
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     config_save_path = os.path.join(checkpoint_dir, "config.json")
