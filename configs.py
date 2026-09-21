@@ -105,7 +105,7 @@ INPUT_VARIANT = "vel_dirmanip_seq"
 # INPUT_VARIANT = "vel_osim_seq"
 # INPUT_VARIANT = "vel_eff_seq"
 
-GRIPPER_CLOSED =False
+GRIPPER_CLOSED = True
 
 # Single source of truth for every variant.
 #   name -> (window column prefix, cond_dim, input_dim, log-transform channel)
