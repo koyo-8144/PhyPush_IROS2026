@@ -48,87 +48,161 @@ MULTI_ANGLE = True
 # =============================================================================
 # INPUT_VARIANT
 #
-# The 60-step end-effector VELOCITY sequence is ALWAYS the input. This selects
-# what, if anything, is supplied alongside it.
+# A variant is now just an ORDERED LIST OF PER-STEP CHANNELS fed to the encoder,
+# plus an optional static conditioning scalar. Velocity is no longer assumed:
+# it is channel 'input_vel', and a variant that omits it is a genuine
+# velocity-free ablation.
 #
-#   "vel_only"           velocity sequence only.                    baseline
-#                        input_dim=1, cond_dim=0
-#
-#   "vel_manip_cond"     + worst (minimum) manipulability over the
-#                        SAME 60 steps, as a static conditioning
-#                        token prepended to the encoder sequence.
-#                        input_dim=1, cond_dim=1
-#
-#   "vel_dirmanip_cond"  + worst (minimum) DIRECTIONAL manipulability
+#   --- velocity-based (unchanged behaviour) ---
+#   "vel_only"           velocity only.                               baseline
+#   "vel_manip_cond"     velocity + worst (minimum) manipulability over the
+#                        SAME 60 steps, as a static conditioning token
+#                        prepended to the encoder sequence.
+#   "vel_dirmanip_cond"  velocity + worst (minimum) DIRECTIONAL manipulability
 #                        over the same 60 steps, as a static token.
-#                        input_dim=1, cond_dim=1
+#   "vel_manip_seq"      velocity + full 60-step manipulability, 2nd channel.
+#   "vel_dirmanip_seq"   velocity + full 60-step directional manipulability.
+#   "vel_osim_seq"       velocity + 60-step OPERATIONAL-SPACE INERTIA
+#                        (arm_lam_w*: the mean of the translational diagonal of
+#                        Lambda = (J M^-1 J^T)^-1, one scalar per step).
+#   "vel_eff_seq"        velocity + 60-step EFFECTIVE MASS along the push
+#                        direction u, m_eff = 1 / (u^T Lambda^-1 u)
+#                        (arm_meff_w*).
 #
-#   "vel_manip_seq"      + the full 60-step manipulability sequence,
-#                        as a second input CHANNEL alongside velocity.
-#                        input_dim=2, cond_dim=0
+#   --- NEW: velocity REPLACED by an inertial channel ---
+#   "osim_only"          arm_lam_w  only.                   input_dim=1
+#   "osim_manip"         arm_lam_w  + manipulability.       input_dim=2
+#   "osim_dirmanip"      arm_lam_w  + directional manip.    input_dim=2
+#   "eff_only"           arm_meff_w only.                   input_dim=1
+#   "eff_manip"          arm_meff_w + manipulability.       input_dim=2
+#   "eff_dirmanip"       arm_meff_w + directional manip.    input_dim=2
 #
-#   "vel_dirmanip_seq"   + the full 60-step directional manipulability
-#                        sequence, as a second input channel.
-#                        input_dim=2, cond_dim=0
-#
-#   "vel_osim_seq"       + the 60-step OPERATIONAL-SPACE INERTIA sequence,
-#                        as a second input channel. The CSV stores one
-#                        scalar per step (arm_lam_w*): the mean of the
-#                        translational diagonal of
-#                        Lambda = (J M^-1 J^T)^-1, not the full 6x6 matrix.
-#                        input_dim=2, cond_dim=0
-#
-#   "vel_eff_seq"        + the 60-step EFFECTIVE MASS sequence along the
-#                        push direction u, m_eff = 1 / (u^T Lambda^-1 u)
-#                        (arm_meff_w*), as a second input channel.
-#                        input_dim=2, cond_dim=0
+#   These six carry NO velocity channel, by design: they answer whether the
+#   arm's own inertial signature alone identifies the object, independently of
+#   the measured object motion. The velocity sequence is still loaded and still
+#   drives the PINN sliding mask (vel_filter_threshold) -- it is withheld from
+#   the MODEL INPUT only. If you meant "velocity PLUS these two channels",
+#   add the entry with VEL_PREFIX first; nothing else needs to change.
 #
 # The two inertial channels are LOG-transformed before standardization
-# (VARIANT_LOG_TRANSFORM). Lambda is a matrix inverse and becomes heavy-tailed
-# near kinematic singularities; a single linear mean/std would let a few such
-# rows set the scale for everything else. Rows with a non-positive or
-# non-finite value in the channel (a failed solve, written as 0.0 by the
-# collector) are dropped for these variants.
+# (see CHANNEL_LOG). Lambda is a matrix inverse and becomes heavy-tailed near
+# kinematic singularities; a single linear mean/std would let a few such rows
+# set the scale for everything else. Rows with a non-positive or non-finite
+# value in ANY log channel the variant uses (a failed solve, written as 0.0 by
+# the collector) are dropped.
 #
-# Note on the two scalar variants: the minimum is taken over the 60-step
-# INFERENCE WINDOW, recomputed here from arm_manip_w* / arm_dir_manip_w*. It is
-# NOT the `worst_manipulability` / `worst_dir_manipulability` column, which is
-# the minimum over the WHOLE push (~300 steps, including approach and
-# post-impact). Taking it over the window keeps all four variants describing the
-# same slice of time as the velocity input, so they are comparable.
+# Note on the scalar (cond) variants: the minimum is taken over the 60-step
+# INFERENCE WINDOW, recomputed from arm_manip_w* / arm_dir_manip_w*. It is NOT
+# the `worst_manipulability` / `worst_dir_manipulability` column, which is the
+# minimum over the WHOLE push (~300 steps, including approach and post-impact).
 # =============================================================================
 # INPUT_VARIANT = "vel_only"
 # INPUT_VARIANT = "vel_manip_cond"
 # INPUT_VARIANT = "vel_dirmanip_cond"
 # INPUT_VARIANT = "vel_manip_seq"
-INPUT_VARIANT = "vel_dirmanip_seq"
+# INPUT_VARIANT = "vel_dirmanip_seq"
 # INPUT_VARIANT = "vel_osim_seq"
 # INPUT_VARIANT = "vel_eff_seq"
+# INPUT_VARIANT = "osim_only"
+# INPUT_VARIANT = "osim_manip"
+# INPUT_VARIANT = "osim_dirmanip"
+INPUT_VARIANT = "eff_only"
+# INPUT_VARIANT = "eff_manip"
+# INPUT_VARIANT = "eff_dirmanip"
 
 GRIPPER_CLOSED = True
 
+# =============================================================================
+# CHANNEL REGISTRY
+#
+# prefix -> is it log-transformed before standardization?
+#
+# 'input_vel' is a MARKER, not a window prefix: velocity comes from the
+# input_vel_0..59 columns via the existing vel_cols path and is fed RAW
+# (unstandardized), exactly as before. It is never passed to window_cols().
+# =============================================================================
+VEL_PREFIX = "input_vel"
+
+CHANNEL_LOG = {
+    VEL_PREFIX:        False,   # raw, never standardized
+    "arm_manip_w":     False,   # manipulability w
+    "arm_dir_manip_w": False,   # directional manipulability w_dir
+    "arm_lam_w":       True,    # mean translational diag of Lambda [kg]
+    "arm_meff_w":      True,    # effective mass along push dir [kg]
+}
+
 # Single source of truth for every variant.
-#   name -> (window column prefix, cond_dim, input_dim, log-transform channel)
+#   name -> (ordered tuple of sequence channels, cond channel or None)
 VARIANT_TABLE = {
-    "vel_only":          (None,              0, 1, False),
-    "vel_manip_cond":    ("arm_manip_w",     1, 1, False),
-    "vel_dirmanip_cond": ("arm_dir_manip_w", 1, 1, False),
-    "vel_manip_seq":     ("arm_manip_w",     0, 2, False),
-    "vel_dirmanip_seq":  ("arm_dir_manip_w", 0, 2, False),
-    "vel_osim_seq":      ("arm_lam_w",       0, 2, True),
-    "vel_eff_seq":       ("arm_meff_w",      0, 2, True),
+    "vel_only":          ((VEL_PREFIX,),                       None),
+    "vel_manip_cond":    ((VEL_PREFIX,),                       "arm_manip_w"),
+    "vel_dirmanip_cond": ((VEL_PREFIX,),                       "arm_dir_manip_w"),
+    "vel_manip_seq":     ((VEL_PREFIX, "arm_manip_w"),         None),
+    "vel_dirmanip_seq":  ((VEL_PREFIX, "arm_dir_manip_w"),     None),
+    "vel_osim_seq":      ((VEL_PREFIX, "arm_lam_w"),           None),
+    "vel_eff_seq":       ((VEL_PREFIX, "arm_meff_w"),          None),
+    # --- velocity-free ---
+    "osim_only":         (("arm_lam_w",),                      None),
+    "osim_manip":        (("arm_lam_w", "arm_manip_w"),        None),
+    "osim_dirmanip":     (("arm_lam_w", "arm_dir_manip_w"),    None),
+    "eff_only":          (("arm_meff_w",),                     None),
+    "eff_manip":         (("arm_meff_w", "arm_manip_w"),       None),
+    "eff_dirmanip":      (("arm_meff_w", "arm_dir_manip_w"),   None),
 }
 _VARIANTS = tuple(VARIANT_TABLE)
 if INPUT_VARIANT not in VARIANT_TABLE:
     raise ValueError(f"Unknown INPUT_VARIANT {INPUT_VARIANT!r}. Expected one of {_VARIANTS}.")
 
-# Derived, so train.py / evaluate.py never hardcode these.
-(VARIANT_WINDOW_PREFIX, COND_DIM, INPUT_DIM,
- VARIANT_LOG_TRANSFORM) = VARIANT_TABLE[INPUT_VARIANT]
-USE_ARM_STATE = INPUT_VARIANT != "vel_only"
+# =============================================================================
+# DERIVED -- train.py / evaluate.py / dataset.py never hardcode any of this.
+# =============================================================================
+VARIANT_CHANNELS, VARIANT_COND_PREFIX = VARIANT_TABLE[INPUT_VARIANT]
 
-# Kept for backwards compatibility with older sidecars / scripts that still read
-# ARM_FEATURE_MODE. It now just mirrors the variant.
+_unknown = [c for c in VARIANT_CHANNELS if c not in CHANNEL_LOG]
+if _unknown:
+    raise ValueError(f"Variant {INPUT_VARIANT!r} references unregistered channels {_unknown}.")
+if VARIANT_COND_PREFIX is not None and VARIANT_COND_PREFIX not in CHANNEL_LOG:
+    raise ValueError(f"Variant {INPUT_VARIANT!r} cond channel {VARIANT_COND_PREFIX!r} is unregistered.")
+if VARIANT_COND_PREFIX == VEL_PREFIX:
+    raise ValueError("Velocity cannot be a static conditioning scalar.")
+if len(set(VARIANT_CHANNELS)) != len(VARIANT_CHANNELS):
+    raise ValueError(f"Variant {INPUT_VARIANT!r} repeats a channel.")
+if not VARIANT_CHANNELS:
+    raise ValueError(f"Variant {INPUT_VARIANT!r} has no input channels.")
+
+USE_VEL = VEL_PREFIX in VARIANT_CHANNELS
+
+# The per-step WINDOW channels (everything except velocity), in model order.
+VARIANT_SEQ_PREFIXES = tuple(c for c in VARIANT_CHANNELS if c != VEL_PREFIX)
+VARIANT_SEQ_LOG = tuple(CHANNEL_LOG[c] for c in VARIANT_SEQ_PREFIXES)
+
+COND_DIM = 1 if VARIANT_COND_PREFIX is not None else 0
+VARIANT_COND_LOG = CHANNEL_LOG[VARIANT_COND_PREFIX] if COND_DIM else False
+
+INPUT_DIM = len(VARIANT_CHANNELS)
+N_SEQ_EXTRA = len(VARIANT_SEQ_PREFIXES)
+
+# Batch slot 9 holds EITHER the cond token OR the extra sequence channels, and
+# dataset.py / train.py / evaluate.py rely on that being unambiguous.
+if COND_DIM > 0 and N_SEQ_EXTRA > 0:
+    raise ValueError(
+        f"Variant {INPUT_VARIANT!r} asks for both a conditioning scalar and extra "
+        f"sequence channels. The batch layout reserves one slot for the two. Give "
+        f"the dataset a second slot before adding such a variant.")
+
+USE_ARM_STATE = (N_SEQ_EXTRA > 0) or (COND_DIM > 0)
+
+# The channels whose standardization stats must be persisted, in stats order.
+VARIANT_STATS_CHANNELS = ((VARIANT_COND_PREFIX,) if COND_DIM
+                          else VARIANT_SEQ_PREFIXES)
+VARIANT_STATS_LOG = ((VARIANT_COND_LOG,) if COND_DIM else VARIANT_SEQ_LOG)
+VARIANT_STATS_KIND = "cond" if COND_DIM else "seq"
+
+# --- Legacy aliases. First stats channel only; kept so older sidecars and
+#     scripts that read these names still import. New code should use
+#     VARIANT_STATS_CHANNELS / VARIANT_STATS_LOG, which describe every channel.
+VARIANT_WINDOW_PREFIX = VARIANT_STATS_CHANNELS[0] if VARIANT_STATS_CHANNELS else None
+VARIANT_LOG_TRANSFORM = VARIANT_STATS_LOG[0] if VARIANT_STATS_LOG else False
 ARM_FEATURE_MODE = INPUT_VARIANT
 
 
@@ -138,8 +212,8 @@ elif FRAME_MODE == "local":
     if MULTI_ANGLE:
         if GRIPPER_CLOSED:
             CSV_PATH = ("/home/psxkf4/IsaacLab/source/collected_data/"
-                        "data_cube_closed_gripper_multi_angle_sb3/"
-                        "data_cube_closed_gripper_multi_angle_sb3.csv")
+                        "data_cube_closed_gripper_multi_angle_sb3_v2/"
+                        "data_cube_closed_gripper_multi_angle_sb3_v2.csv")
         else:
             CSV_PATH = ("/home/psxkf4/IsaacLab/source/collected_data/"
                                 "data_cube_opened_gripper_multi_angle_sb3/"
@@ -219,6 +293,14 @@ config_multi_angle = {
     'arm_feature_mode': ARM_FEATURE_MODE,
     'cond_dim': COND_DIM,
     'input_dim': INPUT_DIM,
+    'use_vel': USE_VEL,
+    'variant_channels': list(VARIANT_CHANNELS),
+    'variant_cond_prefix': VARIANT_COND_PREFIX,
+    'variant_seq_prefixes': list(VARIANT_SEQ_PREFIXES),
+    'variant_seq_log': list(VARIANT_SEQ_LOG),
+    'variant_cond_log': VARIANT_COND_LOG,
+    # legacy keys, first stats channel only -- kept so old checkpoints and
+    # sidecar readers still load.
     'variant_window_prefix': VARIANT_WINDOW_PREFIX,
     'variant_log_transform': VARIANT_LOG_TRANSFORM,
     'max_push_lateral_offset': MAX_PUSH_LATERAL_OFFSET,

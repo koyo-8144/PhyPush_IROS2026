@@ -11,9 +11,13 @@ from sklearn.model_selection import GroupShuffleSplit
 
 from models import PhysicsTransformerEstimator
 from dataset import (create_dataloaders, load_dataset_csv, load_arm_stats,
-                     window_cols, variant_window, gather_pinn_windows)
-from configs import (INPUT_VARIANT, COND_DIM, INPUT_DIM, VARIANT_WINDOW_PREFIX,
-                     VARIANT_LOG_TRANSFORM, FRAME_MODE)
+                     window_cols, variant_window, variant_windows,
+                     variant_valid_rows, gather_pinn_windows)
+from configs import (INPUT_VARIANT, COND_DIM, INPUT_DIM, USE_VEL,
+                     VARIANT_CHANNELS, VARIANT_COND_PREFIX, VARIANT_COND_LOG,
+                     VARIANT_SEQ_PREFIXES, VARIANT_SEQ_LOG, N_SEQ_EXTRA,
+                     VARIANT_STATS_CHANNELS, VARIANT_STATS_LOG,
+                     VARIANT_WINDOW_PREFIX, VARIANT_LOG_TRANSFORM, FRAME_MODE)
 from utils import set_seed, clean_force_col
 from configs import (M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN,
                      M_UNSEEN_MAX, MU_UNSEEN_MAX, GLOBAL_M_RANGE, GLOBAL_MU_RANGE,
@@ -27,61 +31,68 @@ PLOT_SHOW = False
 # SMOOTHING_WINDOW_SIZE = 3
 TOP_NUM = 10
 
+# =============================================================================
+# TRAINED-RUN TABLE
+#
+# (gripper folder, INPUT_VARIANT) -> run timestamp.
+#
+# The model-string half of the path is DERIVED, not stored: build_model_string
+# appends the variant name to the base loss string for every variant except
+# vel_only, so storing it twice is just a way to get them out of sync. Leave a
+# cell "" until that variant has been trained -- the guard below then names it
+# instead of silently pointing at a directory that does not exist.
+# =============================================================================
+MODEL_BASE = "pinn_pcri-L1_p5c10.0_multiangle"
+
+RUN_TIMESTAMPS = {
+    ("gripper_closed", "vel_only"):          "20260917_191033",
+    ("gripper_closed", "vel_manip_cond"):    "20260917_220336",
+    ("gripper_closed", "vel_dirmanip_cond"): "20260918_000726",
+    ("gripper_closed", "vel_manip_seq"):     "20260918_004750",
+    ("gripper_closed", "vel_dirmanip_seq"):  "20260918_021512",
+    ("gripper_closed", "vel_osim_seq"):      "20260916_195532",
+    ("gripper_closed", "vel_eff_seq"):       "20260916_231604",
+    # --- velocity-free variants: fill in after training ---
+    ("gripper_closed", "osim_only"):         "",
+    ("gripper_closed", "osim_manip"):        "",
+    ("gripper_closed", "osim_dirmanip"):     "",
+    ("gripper_closed", "eff_only"):          "",
+    ("gripper_closed", "eff_manip"):         "",
+    ("gripper_closed", "eff_dirmanip"):      "",
+
+    ("gripper_opened", "vel_only"):          "20260918_104227",
+    ("gripper_opened", "vel_manip_cond"):    "",
+    ("gripper_opened", "vel_dirmanip_cond"): "",
+    ("gripper_opened", "vel_manip_seq"):     "",
+    ("gripper_opened", "vel_dirmanip_seq"):  "",
+    ("gripper_opened", "vel_osim_seq"):      "20260917_144436",
+    ("gripper_opened", "vel_eff_seq"):       "20260917_153423",
+    ("gripper_opened", "osim_only"):         "",
+    ("gripper_opened", "osim_manip"):        "",
+    ("gripper_opened", "osim_dirmanip"):     "",
+    ("gripper_opened", "eff_only"):          "",
+    ("gripper_opened", "eff_manip"):         "",
+    ("gripper_opened", "eff_dirmanip"):      "",
+}
+
 if MULTI_ANGLE:
-    if GRIPPER_CLOSED:
-        gripper_folder_name = "gripper_closed"
-        if INPUT_VARIANT == "vel_only":
-            time = "20260917_191033"
-            model = "pinn_pcri-L1_p5c10.0_multiangle"
-        elif INPUT_VARIANT == "vel_manip_cond":
-            time = "20260917_220336"
-            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond"
-        elif INPUT_VARIANT == "vel_dirmanip_cond":
-            time = "20260918_000726"
-            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond"
-        elif INPUT_VARIANT == "vel_manip_seq":
-            time = "20260918_004750"
-            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq"
-        elif INPUT_VARIANT == "vel_dirmanip_seq":
-            time = "20260918_021512"
-            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"
-        elif INPUT_VARIANT == "vel_osim_seq":
-            time = "20260916_195532"
-            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq"
-        elif INPUT_VARIANT == "vel_eff_seq":
-            time = "20260916_231604"
-            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq"
-    else:
-        gripper_folder_name = "gripper_opened"
-        if INPUT_VARIANT == "vel_only":
-            time = "20260918_104227"
-            model = "pinn_pcri-L1_p5c10.0_multiangle"
-        elif INPUT_VARIANT == "vel_manip_cond":
-            time = ""
-            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond"
-        elif INPUT_VARIANT == "vel_dirmanip_cond":
-            time = ""
-            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond"
-        elif INPUT_VARIANT == "vel_manip_seq":
-            time = ""
-            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq"
-        elif INPUT_VARIANT == "vel_dirmanip_seq":
-            time = ""
-            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq"
-        elif INPUT_VARIANT == "vel_osim_seq":
-            time = "20260917_144436"
-            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq"
-        elif INPUT_VARIANT == "vel_eff_seq":
-            time = "20260917_153423"
-            model = "pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq"
+    gripper_folder_name = "gripper_closed" if GRIPPER_CLOSED else "gripper_opened"
+    key = (gripper_folder_name, INPUT_VARIANT)
+    if key not in RUN_TIMESTAMPS:
+        raise SystemExit(
+            f"evaluate.py: no entry in RUN_TIMESTAMPS for {key}. Add one.")
+    time = RUN_TIMESTAMPS[key]
+    model = MODEL_BASE if INPUT_VARIANT == "vel_only" else f"{MODEL_BASE}_{INPUT_VARIANT}"
 else:
+    gripper_folder_name = "gripper_closed" if GRIPPER_CLOSED else "gripper_opened"
     time = "20260811_063229"
     model = "pinn_pcri-L1_p5c10.0"
 
-if time.startswith("<"):
+if not time or time.startswith("<"):
     raise SystemExit(
-        f"evaluate.py: no trained run is set for INPUT_VARIANT='{INPUT_VARIANT}'. "
-        f"Train it, then put its run timestamp in the path table above.")
+        f"evaluate.py: no trained run is set for INPUT_VARIANT='{INPUT_VARIANT}' "
+        f"({gripper_folder_name}). Train it, then put its run timestamp in "
+        f"RUN_TIMESTAMPS above.")
 
 train_from = "from_20260916"
 
@@ -109,6 +120,8 @@ def get_eval_arm_stats():
 
     Never recomputed here: any mismatch in filtering, split or float path
     mis-scales the input and can wreck a model that leaned on it.
+
+    mean/std come back as (1, K) in the variant's channel order.
     """
     feature_cols, mean, std = load_arm_stats()
     mean = np.asarray(mean, dtype=np.float32).reshape(1, -1)
@@ -117,6 +130,40 @@ def get_eval_arm_stats():
     print(f"[VARIANT]   mean={np.round(mean.flatten(), 6)}, "
           f"std={np.round(std.flatten(), 6)}")
     return feature_cols, mean, std
+
+
+def _check_checkpoint_matches_configs():
+    """Refuse to evaluate a checkpoint trained as a different variant.
+
+    Compares the full channel list, not just the first prefix: two variants can
+    share their first channel and differ in the second (osim_manip vs
+    osim_dirmanip), which the old single-prefix check would have waved through.
+    """
+    ckpt_variant = config.get('input_variant', 'vel_only')
+    ckpt_channels = config.get('variant_channels')
+    ckpt_cond = config.get('variant_cond_prefix', None)
+    ckpt_use_vel = config.get('use_vel', True)
+
+    if ckpt_channels is None:
+        # Checkpoint predates the channel list: fall back to the legacy keys.
+        ckpt_channels = list(VARIANT_CHANNELS) if ckpt_variant == INPUT_VARIANT else None
+        print("[VARIANT][WARNING] checkpoint config has no 'variant_channels' "
+              "(trained before the multi-channel table). Falling back to the "
+              "variant name for the compatibility check.")
+
+    mismatch = (
+        ckpt_variant != INPUT_VARIANT
+        or (ckpt_channels is not None and list(ckpt_channels) != list(VARIANT_CHANNELS))
+        or ckpt_cond != VARIANT_COND_PREFIX
+        or bool(ckpt_use_vel) != bool(USE_VEL)
+    )
+    if mismatch:
+        raise ValueError(
+            f"Checkpoint was trained as '{ckpt_variant}' "
+            f"(channels={ckpt_channels}, cond={ckpt_cond}, use_vel={ckpt_use_vel}) "
+            f"but configs selects '{INPUT_VARIANT}' "
+            f"(channels={list(VARIANT_CHANNELS)}, cond={VARIANT_COND_PREFIX}, "
+            f"use_vel={USE_VEL}).")
 
 # ==========================================
 # EXPERIMENT FUNCTIONS
@@ -301,51 +348,54 @@ def main():
     input_variant = config.get('input_variant', 'vel_only')
     cond_dimension = config.get('cond_dim', 0)
     input_dimension = config.get('input_dim', 1)
+    use_vel = bool(config.get('use_vel', True))
     use_cond = cond_dimension > 0
-    use_seq_channel = input_dimension > 1
+    use_seq_channel = N_SEQ_EXTRA > 0
     print(f"[VARIANT] {input_variant}: input_dim={input_dimension}, "
-          f"cond_dim={cond_dimension}")
+          f"cond_dim={cond_dimension}, use_vel={use_vel}, "
+          f"channels={list(VARIANT_CHANNELS)}")
 
     _cond_cols, _seq_cols = [], []
     if use_arm_state:
+        _check_checkpoint_matches_configs()
         _, stat_mean, stat_std = get_eval_arm_stats()
 
-        ckpt_prefix = config.get('variant_window_prefix', VARIANT_WINDOW_PREFIX)
-        ckpt_log = bool(config.get('variant_log_transform', False))
-        if input_variant != INPUT_VARIANT or ckpt_prefix != VARIANT_WINDOW_PREFIX \
-                or ckpt_log != bool(VARIANT_LOG_TRANSFORM):
-            raise ValueError(
-                f"Checkpoint was trained as '{input_variant}' (channel {ckpt_prefix}, "
-                f"log={ckpt_log}) but configs selects '{INPUT_VARIANT}' "
-                f"(channel {VARIANT_WINDOW_PREFIX}, log={VARIANT_LOG_TRANSFORM}).")
-
-        # Same transform as training (log for the inertial channels).
-        W, valid, wcols = variant_window(df)
-        if not wcols:
-            raise ValueError(f"No '{VARIANT_WINDOW_PREFIX}*' columns for variant "
-                             f"'{input_variant}'.")
-        if not valid.all():
-            print(f"[FILTER] dropping {int((~valid).sum())} rows with a zero / "
-                  f"non-finite '{VARIANT_WINDOW_PREFIX}*' step (as in training)")
-            df = df[valid].copy()
-            W = W[valid]
+        # Same row filter as training: a log channel must be positive and finite
+        # everywhere in the window. With two log channels the masks are ANDed.
+        if any(VARIANT_STATS_LOG):
+            valid = variant_valid_rows(df)
+            if not valid.all():
+                print(f"[FILTER] dropping {int((~valid).sum())} rows with a zero / "
+                      f"non-finite step in a log channel (as in training)")
+                df = df[valid].copy()
 
         if use_cond:
             # Same reduction as training: MINIMUM over the 60-step window, not
             # the whole-push `worst_*` column.
+            W, _, wcols = variant_window(df, VARIANT_COND_PREFIX, VARIANT_COND_LOG)
+            if not wcols:
+                raise ValueError(f"No '{VARIANT_COND_PREFIX}*' columns for variant "
+                                 f"'{input_variant}'.")
             raw = W.min(axis=1, keepdims=True)
             cond_arr = (raw - stat_mean) / stat_std
             cond_frame = pd.DataFrame(cond_arr, columns=['_cond_0'], index=df.index)
             df = pd.concat([df, cond_frame], axis=1)
             _cond_cols = ['_cond_0']
-        else:
-            seq_arr = (W - stat_mean) / stat_std
-            seq_frame = pd.DataFrame(
-                seq_arr, columns=[f'_seq_{j}' for j in range(len(wcols))],
-                index=df.index)
-            df = pd.concat([df, seq_frame], axis=1)
-            _seq_cols = list(seq_frame.columns)
 
+        elif use_seq_channel:
+            # (N, T, K), standardized per channel with the TRAINING stats.
+            A, _, cols_per = variant_windows(
+                df, VARIANT_SEQ_PREFIXES, VARIANT_SEQ_LOG, seq_len=seq_len)
+            A = (A - stat_mean.reshape(1, 1, -1)) / stat_std.reshape(1, 1, -1)
+
+            # Flatten to columns named _seq_<channel>_<t> so the per-domain slice
+            # below stays row-aligned with X_vel, then reshape back to (N, T, K).
+            frames = []
+            for k, p in enumerate(VARIANT_SEQ_PREFIXES):
+                names = [f'_seq_{k}_{j}' for j in range(A.shape[1])]
+                frames.append(pd.DataFrame(A[:, :, k], columns=names, index=df.index))
+                _seq_cols.append(names)
+            df = pd.concat([df] + frames, axis=1)
 
     model = PhysicsTransformerEstimator(
         input_dim=input_dimension,
@@ -412,11 +462,16 @@ def main():
         b_cond = (torch.tensor(df_domain[_cond_cols].values).float().to(device)
                   if use_cond else None)
 
-        if use_seq_channel:
-            seq_np = df_domain[_seq_cols].values.astype(np.float32)[:, :, None]
-            X_in = torch.cat([X_vel, torch.tensor(seq_np).to(device)], dim=-1)
-        else:
-            X_in = X_vel
+        # Assemble the input in configs.VARIANT_CHANNELS order: velocity first
+        # when the variant uses it, then each extra channel.
+        channels = [X_vel] if use_vel else []
+        for names in _seq_cols:
+            ch = df_domain[names].values.astype(np.float32)[:, :, None]
+            channels.append(torch.tensor(ch).to(device))
+        X_in = torch.cat(channels, dim=-1) if len(channels) > 1 else channels[0]
+        assert X_in.shape[-1] == input_dimension, (
+            f"assembled {X_in.shape[-1]} channels but the model expects "
+            f"{input_dimension}")
 
         # Vectorized gather, same FRAME_MODE axis mapping as training.
         pw = gather_pinn_windows(df_domain, seq_len)
@@ -444,6 +499,13 @@ def main():
 
     # # ==========================================
     # # EVALUATION LOOP: REAL DATA
+    # #
+    # # NOTE: the real collector records 'manipulability' only. That means this
+    # # block supports the manipulability variants and nothing else -- the
+    # # directional, Lambda and m_eff channels are sim-frame quantities that are
+    # # not logged on hardware. Every velocity-free variant (osim_*, eff_*) is
+    # # therefore un-evaluable on real data until the collector writes those
+    # # columns; the guards below raise rather than silently feed a wrong channel.
     # # ==========================================
     # real_eval_csv_path = os.path.join(EVAL_CHECKPOINT_DIR, "real_evaluation_summary.csv")
     # real_detailed_csv_path = os.path.join(EVAL_CHECKPOINT_DIR, "real_detailed_inference.csv")
@@ -491,12 +553,12 @@ def main():
     #                 # configuration applied to every real run. Real-data numbers
     #                 # are therefore NOT conditioned in any meaningful sense.
     #                 if use_cond:
-    #                     if VARIANT_WINDOW_PREFIX == 'arm_dir_manip_w':
+    #                     if VARIANT_COND_PREFIX != 'arm_manip_w':
     #                         raise ValueError(
-    #                             "Variant 'vel_dirmanip_cond' cannot be evaluated on "
-    #                             "real data: collect_multi_angle_data.py records "
-    #                             "'manipulability' but not directional manipulability. "
-    #                             "Add w_dir to the real collector first.")
+    #                             f"Variant '{INPUT_VARIANT}' cannot be evaluated on "
+    #                             f"real data: collect_multi_angle_data.py records "
+    #                             f"'manipulability' but not '{VARIANT_COND_PREFIX}'. "
+    #                             f"Add that channel to the real collector first.")
     #                     if 'manipulability' not in df_inf.columns:
     #                         raise ValueError("Real CSV has no 'manipulability' column.")
     #                     raw_w = float(df_inf['manipulability'].min())
@@ -507,16 +569,15 @@ def main():
     #                     b_cond_real = None
 
     #                 if use_seq_channel:
-    #                     if VARIANT_WINDOW_PREFIX == 'arm_dir_manip_w':
+    #                     if list(VARIANT_SEQ_PREFIXES) != ['arm_manip_w']:
     #                         raise ValueError(
-    #                             "Variant 'vel_dirmanip_seq' cannot be evaluated on "
-    #                             "real data -- see above.")
+    #                             f"Variant '{INPUT_VARIANT}' cannot be evaluated on "
+    #                             f"real data -- see above.")
     #                     seq_real = df_inf['manipulability'].values.astype(np.float32)
     #                     seq_real = (seq_real - stat_mean[0, 0]) / stat_std[0, 0]
-    #                     X_in_real = torch.cat([
-    #                         X_vel_real,
-    #                         torch.tensor(seq_real).view(1, -1, 1).to(device)
-    #                     ], dim=-1)
+    #                     seq_real_t = torch.tensor(seq_real).view(1, -1, 1).to(device)
+    #                     X_in_real = (torch.cat([X_vel_real, seq_real_t], dim=-1)
+    #                                  if use_vel else seq_real_t)
     #                 else:
     #                     X_in_real = X_vel_real
 

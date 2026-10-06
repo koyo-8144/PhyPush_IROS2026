@@ -9,8 +9,13 @@ from utils import clean_force_col
 from configs import (M_UNSEEN_MAX, MU_UNSEEN_MAX, FRAME_MODE, MULTI_ANGLE,
                      M_SEEN_MIN, M_SEEN_MAX, MU_SEEN_MIN, MU_SEEN_MAX,
                      USE_ARM_STATE, CSV_PATH,
-                     INPUT_VARIANT, COND_DIM, INPUT_DIM, VARIANT_WINDOW_PREFIX,
-                     VARIANT_LOG_TRANSFORM,
+                     INPUT_VARIANT, COND_DIM, INPUT_DIM, USE_VEL,
+                     VEL_PREFIX, CHANNEL_LOG,
+                     VARIANT_CHANNELS, VARIANT_COND_PREFIX, VARIANT_COND_LOG,
+                     VARIANT_SEQ_PREFIXES, VARIANT_SEQ_LOG, N_SEQ_EXTRA,
+                     VARIANT_STATS_CHANNELS, VARIANT_STATS_LOG,
+                     VARIANT_STATS_KIND,
+                     VARIANT_WINDOW_PREFIX, VARIANT_LOG_TRANSFORM,
                      MAX_PUSH_LATERAL_OFFSET, MAX_PUSH_COM_OFFSET)
 
 # =============================================================================
@@ -60,10 +65,10 @@ ARM_FEATURE_COLS = [c for c in ARM_STATIC_COLS
 
 # Per-step window channels, aligned one-to-one with input_vel_0..59.
 # These are the columns the input variants actually draw from.
-#   arm_manip_w      manipulability w                       (vel_manip_*)
-#   arm_dir_manip_w  directional manipulability w_dir       (vel_dirmanip_*)
-#   arm_lam_w        mean translational diag of Lambda [kg] (vel_osim_seq)
-#   arm_meff_w       effective mass along push dir [kg]     (vel_eff_seq)
+#   arm_manip_w      manipulability w                       (*_manip variants)
+#   arm_dir_manip_w  directional manipulability w_dir       (*_dirmanip variants)
+#   arm_lam_w        mean translational diag of Lambda [kg] (osim variants)
+#   arm_meff_w       effective mass along push dir [kg]     (eff variants)
 WINDOW_PREFIXES = ('arm_manip_w', 'arm_dir_manip_w', 'arm_lam_w', 'arm_meff_w')
 
 
@@ -81,7 +86,7 @@ def window_cols(df_or_header, prefix):
 
 
 def variant_window(df, prefix=None, log_transform=None):
-    """The per-step window channel for a variant, AFTER the variant transform.
+    """ONE per-step window channel, AFTER the channel transform.
 
     Shared by create_dataloaders and evaluate.py so both apply the identical
     transform before standardization.
@@ -94,9 +99,17 @@ def variant_window(df, prefix=None, log_transform=None):
              finite and > 0. The collector writes a failed m_eff as 0.0, which
              is not a real mass. Always all-True for untransformed channels.
       cols   the ordered column names.
+
+    `prefix` defaults to the variant's first stats channel purely for backwards
+    compatibility; multi-channel callers should pass it explicitly.
     """
     prefix = VARIANT_WINDOW_PREFIX if prefix is None else prefix
-    log_transform = VARIANT_LOG_TRANSFORM if log_transform is None else log_transform
+    if prefix is None or prefix == VEL_PREFIX:
+        # Velocity is not a window channel -- it comes from input_vel_* via the
+        # ordinary vel_cols path and is fed raw.
+        return None, None, []
+    if log_transform is None:
+        log_transform = CHANNEL_LOG.get(prefix, VARIANT_LOG_TRANSFORM)
     cols = window_cols(df, prefix)
     if not cols:
         return None, None, cols
@@ -107,6 +120,63 @@ def variant_window(df, prefix=None, log_transform=None):
     else:
         valid = np.ones(len(W), dtype=bool)
     return W.astype(np.float32), valid, cols
+
+
+def variant_windows(df, prefixes=None, logs=None, seq_len=None):
+    """Every window channel a variant needs, stacked in model order.
+
+    Returns (A, valid, cols_per_channel):
+      A      (N, T, K) float32, K = len(prefixes), channel k = prefixes[k].
+      valid  (N,) bool, the AND over all channels' validity.
+      cols_per_channel  list of K ordered column-name lists.
+
+    Raises if a channel is absent from the CSV or has a different number of
+    steps than `seq_len`: two channels on different windows are not
+    time-aligned, and silently trusting them would mis-pair every timestep.
+    """
+    prefixes = VARIANT_SEQ_PREFIXES if prefixes is None else tuple(prefixes)
+    if logs is None:
+        logs = tuple(CHANNEL_LOG.get(p, False) for p in prefixes)
+
+    if not prefixes:
+        return None, np.ones(len(df), dtype=bool), []
+
+    Ws, cols_all = [], []
+    valid = np.ones(len(df), dtype=bool)
+    for p, lg in zip(prefixes, logs):
+        W, v, cols = variant_window(df, p, lg)
+        if not cols:
+            raise ValueError(
+                f"INPUT_VARIANT='{INPUT_VARIANT}' needs '{p}*' columns, none "
+                f"found in the CSV.")
+        if seq_len is not None and len(cols) != seq_len:
+            raise ValueError(
+                f"Window channel '{p}*' has {len(cols)} steps but the input "
+                f"window is {seq_len}. They must be the same window or the "
+                f"channels are not time-aligned.")
+        Ws.append(W)
+        cols_all.append(cols)
+        valid &= v
+
+    widths = {W.shape[1] for W in Ws}
+    if len(widths) != 1:
+        raise ValueError(
+            f"Variant channels {prefixes} have differing lengths {sorted(widths)}.")
+
+    return np.stack(Ws, axis=-1), valid, cols_all
+
+
+def variant_valid_rows(df):
+    """Rows usable by the CURRENT variant: every log channel it reads is
+    positive and finite. All-True when the variant reads no log channel."""
+    valid = np.ones(len(df), dtype=bool)
+    for p, lg in zip(VARIANT_STATS_CHANNELS, VARIANT_STATS_LOG):
+        if not lg:
+            continue
+        _, v, cols = variant_window(df, p, lg)
+        if cols:
+            valid &= v
+    return valid
 
 
 def _report_column_availability(df):
@@ -313,33 +383,50 @@ def gather_pinn_windows(df, seq_len):
 # =============================================================================
 # VARIANT STATS PERSISTENCE
 #
-# The conditioning token and the extra input channel are only correct at eval
+# The conditioning token and the extra input channels are only correct at eval
 # time if standardized with the EXACT mean/std used in training. Recomputing at
 # eval risks a mismatch (different filtering, split, or float path), which
 # silently mis-scales the input. Training writes the stats to a sidecar keyed to
 # (CSV, variant) and eval loads them verbatim.
+#
+# mean/std are (1, K) with K = number of standardized channels, in model order:
+#   kind='cond' -> K = 1, the minimum over the window
+#   kind='seq'  -> K = len(VARIANT_SEQ_PREFIXES), one scalar per channel
+# Velocity is NOT standardized and never appears here.
 # =============================================================================
 def arm_stats_path(csv_path=None):
     base = csv_path if csv_path is not None else CSV_PATH
     return f"{base}.arm_stats.{INPUT_VARIANT}.npz"
 
 
-def save_arm_stats(feature_cols, mean, std, csv_path=None, seq_len=None):
+def save_arm_stats(feature_cols, mean, std, csv_path=None, seq_len=None,
+                   kind=None, channels=None, logs=None):
     path = arm_stats_path(csv_path)
+    kind = VARIANT_STATS_KIND if kind is None else kind
+    channels = VARIANT_STATS_CHANNELS if channels is None else tuple(channels)
+    logs = VARIANT_STATS_LOG if logs is None else tuple(logs)
     np.savez(path,
              feature_cols=np.array(feature_cols, dtype=object),
              mean=np.asarray(mean, dtype=np.float32),
              std=np.asarray(std, dtype=np.float32),
              mode=str(INPUT_VARIANT),
              variant=str(INPUT_VARIANT),
-             window_prefix=str(VARIANT_WINDOW_PREFIX),
-             log_transform=bool(VARIANT_LOG_TRANSFORM),
+             kind=str(kind),
+             channels=np.array(list(channels), dtype=object),
+             window_prefix=str(channels[0]) if channels else "",
+             log_transform=np.array(list(logs), dtype=bool),
+             use_vel=bool(USE_VEL),
+             input_dim=int(INPUT_DIM),
+             cond_dim=int(COND_DIM),
              seq_len=int(seq_len) if seq_len is not None else -1)
     print(f"[VARIANT] saved standardization stats -> {path}")
 
 
 def load_arm_stats(csv_path=None):
-    """Return (feature_cols, mean, std) written during training."""
+    """Return (feature_cols, mean, std) written during training.
+
+    mean/std come back shaped (1, K) in the variant's channel order.
+    """
     path = arm_stats_path(csv_path)
     if not os.path.exists(path):
         raise FileNotFoundError(
@@ -348,6 +435,7 @@ def load_arm_stats(csv_path=None):
         )
     d = np.load(path, allow_pickle=True)
     cols = list(d['feature_cols'])
+
     saved = str(d['variant']) if 'variant' in d else (
         str(d['mode']) if 'mode' in d else None)
     if saved is not None and saved != INPUT_VARIANT:
@@ -355,15 +443,34 @@ def load_arm_stats(csv_path=None):
             f"Stats at {path} were saved for variant '{saved}', but "
             f"configs.INPUT_VARIANT is now '{INPUT_VARIANT}'. Retrain or switch back."
         )
+
     # Sidecars written before the log transform existed carry no flag; they were
-    # all linear.
-    saved_log = bool(d['log_transform']) if 'log_transform' in d else False
-    if saved_log != bool(VARIANT_LOG_TRANSFORM):
+    # all linear. Sidecars written before multi-channel variants carry a SCALAR
+    # flag rather than one per channel.
+    saved_logs = (np.atleast_1d(d['log_transform']).astype(bool).tolist()
+                  if 'log_transform' in d else [False])
+    expected_logs = list(VARIANT_STATS_LOG)
+    if saved_logs != expected_logs:
         raise ValueError(
-            f"Stats at {path} were computed with log_transform={saved_log}, but "
-            f"configs says {bool(VARIANT_LOG_TRANSFORM)} for '{INPUT_VARIANT}'. "
+            f"Stats at {path} were computed with log_transform={saved_logs}, but "
+            f"configs says {expected_logs} for '{INPUT_VARIANT}'. "
             f"The mean/std would be applied on the wrong scale.")
-    return cols, d['mean'], d['std']
+
+    if 'channels' in d:
+        saved_channels = [str(c) for c in np.atleast_1d(d['channels']).tolist()]
+        if saved_channels != list(VARIANT_STATS_CHANNELS):
+            raise ValueError(
+                f"Stats at {path} were computed for channels {saved_channels}, but "
+                f"configs says {list(VARIANT_STATS_CHANNELS)} for '{INPUT_VARIANT}'.")
+
+    mean = np.asarray(d['mean'], dtype=np.float32).reshape(1, -1)
+    std = np.asarray(d['std'], dtype=np.float32).reshape(1, -1)
+    n_expected = max(len(VARIANT_STATS_CHANNELS), 1)
+    if mean.shape[1] != n_expected or std.shape[1] != n_expected:
+        raise ValueError(
+            f"Stats at {path} hold {mean.shape[1]} channel stats but "
+            f"'{INPUT_VARIANT}' standardizes {n_expected}.")
+    return cols, mean, std
 
 
 # Conditioning width, for `cond_dim` when constructing the model.
@@ -455,15 +562,16 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0,
 
     # Log-transformed inertial channels cannot take a zero / non-finite step.
     # Drop those rows here, BEFORE any tensor is built, so every array and the
-    # group split see the same rows.
-    if MULTI_ANGLE and USE_ARM_STATE and VARIANT_LOG_TRANSFORM:
-        _, _valid, _cols = variant_window(df_filtered)
-        if _cols:
-            n_bad = int((~_valid).sum())
-            if n_bad:
-                df_filtered = df_filtered[_valid].copy()
-            print(f"[FILTER] '{VARIANT_WINDOW_PREFIX}*' positive & finite: "
-                  f"{len(df_filtered)} rows kept ({n_bad} dropped)")
+    # group split see the same rows. With two channels the masks are ANDed, so a
+    # row has to be clean in both.
+    if MULTI_ANGLE and USE_ARM_STATE and any(VARIANT_STATS_LOG):
+        _valid = variant_valid_rows(df_filtered)
+        n_bad = int((~_valid).sum())
+        if n_bad:
+            df_filtered = df_filtered[_valid].copy()
+        _log_names = [p for p, lg in zip(VARIANT_STATS_CHANNELS, VARIANT_STATS_LOG) if lg]
+        print(f"[FILTER] {_log_names} positive & finite: "
+              f"{len(df_filtered)} rows kept ({n_bad} dropped)")
 
 
     X_acc_flat = df_filtered[acc_cols].values.astype(np.float32)
@@ -516,20 +624,23 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0,
     # =================================================================
     # VARIANT CHANNELS
     #
-    # Every non-baseline variant reads a 60-step window family, so the
-    # scalar and the sequence forms describe the same slice of time as the
-    # velocity input. The scalar is the MINIMUM over that window, recomputed
-    # here -- deliberately not the `worst_*` column, which is the minimum over
-    # the whole ~300-step push and therefore a different quantity.
+    # Every non-velocity channel is a 60-step window family, so each one
+    # describes the same slice of time as the velocity window. The cond scalar
+    # is the MINIMUM over that window, recomputed here -- deliberately not the
+    # `worst_*` column, which is the minimum over the whole ~300-step push and
+    # therefore a different quantity.
     #
     # Standardization uses TRAIN-split statistics only.
-    #   scalar   -> per-feature mean/std, shape (1, 1)
-    #   sequence -> ONE scalar mean/std across all (row, timestep) pairs, so the
-    #               temporal shape the model reads is preserved rather than
-    #               flattened by per-timestep normalization.
+    #   cond -> per-feature mean/std, shape (1, 1)
+    #   seq  -> ONE scalar mean/std PER CHANNEL across all (row, timestep)
+    #           pairs, so the temporal shape the model reads is preserved rather
+    #           than flattened by per-timestep normalization.
+    #
+    # Velocity, when present, stays RAW and is concatenated in train.py /
+    # evaluate.py -- unchanged from the original behaviour.
     # =================================================================
     arm_tensor = None       # (N, cond_dim) static conditioning token
-    seq_tensor = None       # (N, T, 1) extra input channel
+    seq_tensor = None       # (N, T, K) extra input channels, K = N_SEQ_EXTRA
 
     if MULTI_ANGLE and USE_ARM_STATE:
         if not have_arm:
@@ -539,20 +650,19 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0,
                 "or set INPUT_VARIANT='vel_only'."
             )
 
-        W, _, wcols = variant_window(df_filtered)             # (N, T), transformed
-        if not wcols:
-            raise ValueError(
-                f"INPUT_VARIANT='{INPUT_VARIANT}' needs "
-                f"'{VARIANT_WINDOW_PREFIX}*' columns, none found in the CSV."
-            )
-        if len(wcols) != seq_len:
-            raise ValueError(
-                f"Window channel '{VARIANT_WINDOW_PREFIX}*' has {len(wcols)} steps "
-                f"but the velocity input has {seq_len}. They must be the same "
-                f"window or the two channels are not time-aligned."
-            )
-
         if COND_DIM > 0:
+            W, _, wcols = variant_window(
+                df_filtered, VARIANT_COND_PREFIX, VARIANT_COND_LOG)
+            if not wcols:
+                raise ValueError(
+                    f"INPUT_VARIANT='{INPUT_VARIANT}' needs "
+                    f"'{VARIANT_COND_PREFIX}*' columns, none found in the CSV.")
+            if len(wcols) != seq_len:
+                raise ValueError(
+                    f"Window channel '{VARIANT_COND_PREFIX}*' has {len(wcols)} steps "
+                    f"but the input window is {seq_len}. They must be the same "
+                    f"window or the two are not time-aligned.")
+
             # Minimum over the 60-step window -- see the note above.
             raw = W.min(axis=1, keepdims=True)                    # (N, 1)
             mean = raw[train_idx].mean(axis=0, keepdims=True)
@@ -565,39 +675,59 @@ def create_dataloaders(df, batch_size=64, m_seen_min=0.2, m_seen_max=2.0,
                       f"(std/|mean| = {rel:.2e}); standardizing will amplify noise "
                       f"to unit scale.")
 
-            save_arm_stats([f"min({VARIANT_WINDOW_PREFIX}*)"], mean, std, seq_len=seq_len)
+            save_arm_stats([f"min({VARIANT_COND_PREFIX}*)"], mean, std, seq_len=seq_len)
             print(f"[VARIANT] '{INPUT_VARIANT}': cond token {tuple(arm_tensor.shape)} "
                   f"from min over {len(wcols)} window steps")
             print(f"[VARIANT]   train mean={float(mean[0,0]):.6f} "
                   f"std={float(std[0,0]):.6f} "
                   f"range=[{raw.min():.6f}, {raw.max():.6f}]")
 
-        else:
-            # Sequence channel: one scalar mean/std over all (row, timestep).
-            mean = np.array([[W[train_idx].mean()]], dtype=np.float32)
-            std = np.array([[W[train_idx].std()]], dtype=np.float32) + 1e-8
-            seq_tensor = torch.tensor(((W - mean) / std)[:, :, None])   # (N, T, 1)
+        elif N_SEQ_EXTRA > 0:
+            # (N, T, K). One scalar mean/std per channel over all (row, timestep).
+            A, _, cols_per = variant_windows(
+                df_filtered, VARIANT_SEQ_PREFIXES, VARIANT_SEQ_LOG, seq_len=seq_len)
 
-            feat_name = (f"log({VARIANT_WINDOW_PREFIX}*)" if VARIANT_LOG_TRANSFORM
-                         else f"{VARIANT_WINDOW_PREFIX}*")
-            save_arm_stats([feat_name], mean, std, seq_len=seq_len)
-            print(f"[VARIANT] '{INPUT_VARIANT}': input channel {feat_name} "
-                  f"{tuple(seq_tensor.shape)} concatenated to velocity "
-                  f"-> input_dim={INPUT_DIM}")
-            print(f"[VARIANT]   train mean={float(mean[0,0]):.6f} "
-                  f"std={float(std[0,0]):.6f} "
-                  f"per-step range=[{W.min():.6f}, {W.max():.6f}]"
-                  + (" (log space)" if VARIANT_LOG_TRANSFORM else ""))
+            mean = A[train_idx].mean(axis=(0, 1)).reshape(1, -1).astype(np.float32)
+            std = A[train_idx].std(axis=(0, 1)).reshape(1, -1).astype(np.float32) + 1e-8
+            seq_tensor = torch.tensor((A - mean.reshape(1, 1, -1))
+                                      / std.reshape(1, 1, -1))     # (N, T, K)
+
+            feat_names = [(f"log({p}*)" if lg else f"{p}*")
+                          for p, lg in zip(VARIANT_SEQ_PREFIXES, VARIANT_SEQ_LOG)]
+            save_arm_stats(feat_names, mean, std, seq_len=seq_len)
+            print(f"[VARIANT] '{INPUT_VARIANT}': channels {feat_names} "
+                  f"{tuple(seq_tensor.shape)}"
+                  + (" concatenated to velocity" if USE_VEL
+                     else " (velocity NOT used as input)")
+                  + f" -> input_dim={INPUT_DIM}")
+            for k, (p, lg) in enumerate(zip(VARIANT_SEQ_PREFIXES, VARIANT_SEQ_LOG)):
+                print(f"[VARIANT]   {p}: train mean={float(mean[0, k]):.6f} "
+                      f"std={float(std[0, k]):.6f} "
+                      f"per-step range=[{A[:, :, k].min():.6f}, "
+                      f"{A[:, :, k].max():.6f}]"
+                      + (" (log space)" if lg else ""))
+
+    # Sanity: what the model will be built with must match what it will be fed.
+    _built = (1 if USE_VEL else 0) + (seq_tensor.shape[-1] if seq_tensor is not None else 0)
+    assert _built == INPUT_DIM, (
+        f"configs.INPUT_DIM={INPUT_DIM} but the assembled input has {_built} "
+        f"channels (use_vel={USE_VEL}, extra={N_SEQ_EXTRA}).")
+    if not USE_VEL and seq_tensor is None:
+        raise ValueError(
+            f"Variant '{INPUT_VARIANT}' drops velocity but produced no sequence "
+            f"channel. The model would have no input.")
 
     # =================================================================
     # BATCH LAYOUT
     #   0 acc   1 vel   2 y   3 robot_fz   4 rhs_acc   5 lhs_net_f
     #   6 table_fz   7 start_t   8 robot_fx
-    #   9  cond   (present only when COND_DIM > 0)
-    #   9  seq    (present only when INPUT_DIM > 1)
-    # The two are mutually exclusive by construction: a variant is either a
-    # scalar condition or a sequence channel, never both. So index 9 is
-    # unambiguous given the variant.
+    #   9  cond  (N, 1)     present only when COND_DIM > 0
+    #   9  seq   (N, T, K)  present only when N_SEQ_EXTRA > 0
+    # The two are mutually exclusive by construction (configs.py rejects a
+    # variant that asks for both), so index 9 is unambiguous given the variant.
+    #
+    # Slot 1 (velocity) is ALWAYS present even for the velocity-free variants:
+    # the PINN sliding mask reads it. It is simply not fed to the model.
     # =================================================================
     train_tensors = [X_acc_tensor[train_idx], X_vel_tensor[train_idx], y_tensor[train_idx],
                      fz_robot_tensor[train_idx], rhs_acc_tensor[train_idx], lhs_net_f_tensor[train_idx],

@@ -14,7 +14,8 @@ from utils import set_seed, build_model_string, clean_force_col
 from models import PhysicsTransformerEstimator
 from losses import log_mse_loss, PinnLossCalculator
 from dataset import create_dataloaders, load_dataset_csv
-from configs import used_config, CSV_PATH, INPUT_VARIANT, COND_DIM, INPUT_DIM, GRIPPER_CLOSED
+from configs import (used_config, CSV_PATH, INPUT_VARIANT, COND_DIM, INPUT_DIM,
+                     USE_VEL, N_SEQ_EXTRA, GRIPPER_CLOSED)
 
 
 def main():
@@ -84,13 +85,36 @@ def main():
     input_variant = config.get('input_variant', 'vel_only')
     cond_dimension = config.get('cond_dim', 0)
     input_dimension = config.get('input_dim', 1)
-    # A variant is either a scalar condition or an extra sequence channel.
+
+    # A variant is either a scalar condition or extra sequence channels, never
+    # both (configs.py rejects a table entry that asks for both). Velocity is a
+    # channel like any other now: `use_vel` says whether the MODEL sees it. It
+    # is still loaded either way, because the PINN sliding mask reads it.
+    use_vel = bool(config.get('use_vel', True))
+    seq_prefixes = list(config.get('variant_seq_prefixes', []))
+    n_seq_extra = len(seq_prefixes)
     use_cond = cond_dimension > 0
-    use_seq_channel = input_dimension > 1
+    use_seq_channel = n_seq_extra > 0
+
+    def build_input(b_vel, b_extra):
+        """Assemble the encoder input in configs.VARIANT_CHANNELS order.
+
+        Velocity is channel 0 when present (raw, unstandardized); the extra
+        window channels follow in table order (standardized in dataset.py).
+        """
+        if use_vel and b_extra is not None:
+            return torch.cat([b_vel, b_extra], dim=-1)
+        if use_vel:
+            return b_vel
+        return b_extra
+
     print(f"[VARIANT] {input_variant}: input_dim={input_dimension}, "
-          f"cond_dim={cond_dimension}, "
-          f"channel={config.get('variant_window_prefix')}, "
-          f"log={config.get('variant_log_transform', False)}")
+          f"cond_dim={cond_dimension}, use_vel={use_vel}, "
+          f"channels={config.get('variant_channels')}, "
+          f"cond_channel={config.get('variant_cond_prefix')}")
+    if not use_vel:
+        print("[VARIANT] velocity is NOT a model input for this variant "
+              "(still used for the PINN sliding mask).")
 
     p_c = config['pinn_coeffs']
     pinn_coeff_1 = p_c['p1']
@@ -257,10 +281,10 @@ def main():
             b_robot_fx = batch[8].to(device)
             
             
-            # batch[9] is the cond token OR the extra channel, never both.
+            # batch[9] is the cond token OR the extra channels, never both.
             b_cond = batch[9].to(device) if use_cond else None
             b_seq = batch[9].to(device) if use_seq_channel else None
-            b_input = torch.cat([b_vel, b_seq], dim=-1) if use_seq_channel else b_vel
+            b_input = build_input(b_vel, b_seq)
 
             # =======================================================
             # LOCAL FRAME ALIGNMENT FIX
@@ -299,6 +323,10 @@ def main():
             elif loss_type == "pinn" or loss_type == "hybrid":
                 # =======================================================
                 # DYNAMIC PHYSICS MASKING
+                #
+                # These masks read the RAW velocity / acceleration windows, not
+                # the model input, so they are identical across every variant --
+                # including the ones that do not feed velocity to the encoder.
                 # =======================================================
                 is_accelerating_mask = (torch.abs(b_rhs_acc) > acc_filter_threshold).float()
                 mask_net = is_accelerating_mask[:, :seq_len//2]
@@ -509,7 +537,7 @@ def main():
 
                 b_cond = batch[9].to(device) if use_cond else None
                 b_seq = batch[9].to(device) if use_seq_channel else None
-                b_input = torch.cat([b_vel, b_seq], dim=-1) if use_seq_channel else b_vel
+                b_input = build_input(b_vel, b_seq)
 
                 # =======================================================
                 # LOCAL FRAME ALIGNMENT FIX
