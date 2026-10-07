@@ -5,52 +5,154 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from configs import (G, M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN,
                      CSV_PATH, FRAME_MODE, MULTI_ANGLE, USE_ARM_STATE,
-                     INPUT_VARIANT, VARIANT_WINDOW_PREFIX, VARIANT_TABLE)
+                     INPUT_VARIANT, VARIANT_TABLE, CHANNEL_LOG, VEL_PREFIX,
+                     VARIANT_CHANNELS, VARIANT_COND_PREFIX, VARIANT_COND_LOG,
+                     VARIANT_SEQ_PREFIXES, VARIANT_SEQ_LOG,
+                     VARIANT_STATS_CHANNELS, VARIANT_STATS_LOG,
+                     USE_VEL, COND_DIM, INPUT_DIM, N_SEQ_EXTRA)
 
 from dataset import (create_dataloaders, MULTI_ANGLE_COLS, ARM_STATIC_COLS,
                      ARM_STATE_COLS, ARM_FEATURE_COLS, window_cols,
-                     variant_window)
+                     variant_window, variant_windows, variant_valid_rows)
 from utils import clean_force_col, add_min_max_text
 
-# Derived from configs.VARIANT_TABLE so this script can never disagree with
-# what train.py builds.
-ALL_VARIANTS = {name: spec[0] for name, spec in VARIANT_TABLE.items()}
+# =============================================================================
+# VARIANT BOOKKEEPING
+#
+# A variant is an ORDERED LIST OF PER-STEP CHANNELS plus an optional static
+# conditioning scalar:  name -> (channels, cond_prefix). Velocity is the channel
+# VEL_PREFIX; a variant that omits it feeds the model no object motion at all.
+# Everything below is derived from configs.VARIANT_TABLE so this script can
+# never disagree with what train.py builds.
+# =============================================================================
 
-# How each variant reaches the model: (mechanism, input_dim, cond_dim).
-VARIANT_SHAPE = {
-    name: ("baseline" if pfx is None else
-           "cond token" if cdim > 0 else "input channel", idim, cdim)
-    for name, (pfx, cdim, idim, _) in VARIANT_TABLE.items()
-}
+def variant_spec(name):
+    """(mechanism, input_dim, cond_dim, uses_vel, extra_channels, cond_prefix)."""
+    chans, cond = VARIANT_TABLE[name]
+    extra = [c for c in chans if c != VEL_PREFIX]
+    uses_vel = VEL_PREFIX in chans
+    cdim = 1 if cond is not None else 0
+    if cond is not None:
+        mech = "cond token"
+    elif not extra:
+        mech = "baseline"
+    elif uses_vel:
+        mech = f"vel + {len(extra)} chan"
+    else:
+        mech = f"{len(extra)} chan, NO vel"
+    return mech, len(chans), cdim, uses_vel, extra, cond
 
-# Channels that are log-transformed before standardization (inertial ones).
-LOG_PREFIXES = {spec[0] for spec in VARIANT_TABLE.values() if spec[3]}
+
+# Every window channel any variant can read. Velocity is excluded: it is not a
+# window family, it comes from input_vel_* and is fed raw.
+ALL_WINDOW_PREFIXES = sorted({
+    c
+    for chans, cond in VARIANT_TABLE.values()
+    for c in (tuple(chans) + ((cond,) if cond is not None else ()))
+    if c != VEL_PREFIX
+})
+
+# Channels log-transformed before standardization (the inertial ones).
+LOG_PREFIXES = {p for p in ALL_WINDOW_PREFIXES if CHANNEL_LOG[p]}
+
+# Which channels does a given prefix serve, as a scalar and as a sequence?
+_COND_PREFIXES = {cond for _, cond in VARIANT_TABLE.values() if cond is not None}
+
+_CHANNEL_COLORS = ["tab:purple", "tab:olive", "tab:cyan", "tab:pink"]
+_LOG_COLOR = "tab:brown"
 
 
-def visualize_all_variants(df, num_samples=3, standardize=True):
+def _channel_color(pfx, k=0):
+    return _LOG_COLOR if pfx in LOG_PREFIXES else _CHANNEL_COLORS[k % len(_CHANNEL_COLORS)]
+
+
+def _twin(ax, offset=0.0):
+    """A right-hand axis, pushed out by `offset` so two can coexist."""
+    ax2 = ax.twinx()
+    if offset:
+        ax2.spines["right"].set_position(("axes", 1.0 + offset))
+        ax2.set_frame_on(True)
+        ax2.patch.set_visible(False)
+    ax2.grid(False)
+    return ax2
+
+
+def report_variant_catalogue(df):
+    """Which variants this CSV can actually train, and what each one feeds."""
+    print("\n" + "=" * 78)
+    print("INPUT VARIANT CATALOGUE")
+    print("=" * 78)
+    print(f"  active INPUT_VARIANT = '{INPUT_VARIANT}'  "
+          f"(input_dim={INPUT_DIM}, cond_dim={COND_DIM}, use_vel={USE_VEL})")
+
+    have = {p: bool(window_cols(df, p)) for p in ALL_WINDOW_PREFIXES}
+    vel_cols = sorted([c for c in df.columns if "input_vel_" in c],
+                      key=lambda x: int(x.split('_')[-1]))
+    T = len(vel_cols)
+
+    print(f"\n  velocity         input_vel_0..{T - 1}  ({T} steps)")
+    for p in ALL_WINDOW_PREFIXES:
+        cols = window_cols(df, p)
+        tag = "log" if p in LOG_PREFIXES else "raw"
+        if cols:
+            flag = "" if len(cols) == T else f"   [ERROR] {len(cols)} steps != {T}, NOT time-aligned"
+            print(f"  {p + '*':<18} {len(cols)} steps, {tag}{flag}")
+        else:
+            print(f"  {p + '*':<18} MISSING from this CSV")
+
+    print(f"\n  {'variant':<20}{'mechanism':<16}{'in_dim':>7}{'cond':>6}{'vel':>6}"
+          f"  {'channels beside velocity':<34}available")
+    print("  " + "-" * 92)
+    usable = []
+    for name in VARIANT_TABLE:
+        mech, idim, cdim, uses_vel, extra, cond = variant_spec(name)
+        needs = list(extra) + ([cond] if cond is not None else [])
+        missing = [p for p in needs if not have[p]]
+        mark = ("yes" if not missing else f"NO -- missing {missing}")
+        print(f"  {name:<20}{mech:<16}{idim:>7}{cdim:>6}{str(uses_vel):>6}  "
+              f"{str(needs if needs else ['-']):<34}{mark}")
+        if not missing:
+            usable.append(name)
+
+    n_novel = sum(1 for n in usable if not variant_spec(n)[3])
+    print(f"\n  {len(usable)}/{len(VARIANT_TABLE)} variants trainable on this CSV; "
+          f"{n_novel} of them feed NO velocity.")
+    print("     A velocity-free variant asks whether the arm's own inertial signature")
+    print("     identifies the object without seeing it move. Velocity is still loaded")
+    print("     for the PINN sliding mask -- it is withheld from the encoder only.")
+    print("=" * 78 + "\n")
+    return usable
+
+
+def visualize_all_variants(df, num_samples=3, standardize=True, variants=None,
+                           row_height=2.9):
     """Show what EVERY variant actually hands the model, for the same rows.
 
-    One row of panels per variant, one column per sample. The velocity sequence
-    is drawn in every panel because it is always the input; what changes is what
-    sits beside it:
+    One row of panels per variant, one column per sample. What is drawn:
 
-      vel_only        nothing.
+      velocity        solid blue when the variant feeds it, dashed grey and
+                      labelled "NOT an input" when it does not. It is plotted
+                      either way so the panels stay comparable.
       *_cond          a single scalar, the MINIMUM over the window, drawn as a
                       horizontal line. The model gets it as one extra token
                       prepended to the encoder sequence -- it has no time axis,
                       which is why it is flat here.
-      *_seq           the full 60-step channel on a second y-axis, concatenated
-                      to velocity so input_dim becomes 2. vel_osim_seq (Lambda)
-                      and vel_eff_seq (m_eff) are log-transformed first, so with
-                      standardize=True their panels show standardized log values.
+      extra channels  the full window channel on a right-hand axis, one per
+                      channel, in the order the model receives them. The
+                      inertial channels (arm_lam_w, arm_meff_w) are
+                      log-transformed first, so with standardize=True their
+                      traces are standardized log values.
 
-    Because every panel shows the same three rows, the comparison is like for
-    like: the question each variant poses is visible side by side.
+    Because every panel shows the same rows, the comparison is like for like:
+    the question each variant poses is visible side by side.
 
-    standardize=True plots the conditioning/sequence values after the same
+    standardize=True plots the conditioning / sequence values after the same
     (x - mean) / std the dataloader applies, so the panels show the scale the
     model actually sees rather than raw physical units. Velocity is left raw --
     the dataloader does not standardize it either.
+
+    `variants` limits the figure to a subset of names; the default draws every
+    variant this CSV supports, which with 13 of them makes a tall figure.
     """
     print("\n" + "=" * 78)
     print("ALL INPUT VARIANTS -- what each one feeds the model")
@@ -63,37 +165,35 @@ def visualize_all_variants(df, num_samples=3, standardize=True):
         return
     T = len(vel_cols)
 
-    # Resolve every channel once, and report which variants this CSV supports.
-    channels = {}       # raw values, for raw display and scalar reductions
-    model_space = {}    # after the variant transform (log for inertial channels)
-    valid_rows = {}
-    for pfx in sorted(set(v for v in ALL_VARIANTS.values() if v is not None)):
+    # Resolve every channel once, in both raw and model space.
+    channels, model_space, valid_rows = {}, {}, {}
+    for pfx in ALL_WINDOW_PREFIXES:
         cols = window_cols(df, pfx)
-        channels[pfx] = df[cols].values.astype(np.float32) if cols else None
-        if cols:
-            Wt, ok, _ = variant_window(df, prefix=pfx,
-                                       log_transform=pfx in LOG_PREFIXES)
-            model_space[pfx], valid_rows[pfx] = Wt, ok
-            if not ok.all():
-                print(f"  [NOTE] '{pfx}*': {int((~ok).sum())} rows with a zero / "
-                      f"non-finite step; training drops them for this variant.")
-        if cols and len(cols) != T:
+        if not cols:
+            channels[pfx] = None
+            continue
+        channels[pfx] = df[cols].values.astype(np.float32)
+        Wt, ok, _ = variant_window(df, prefix=pfx, log_transform=pfx in LOG_PREFIXES)
+        model_space[pfx], valid_rows[pfx] = Wt, ok
+        if not ok.all():
+            print(f"  [NOTE] '{pfx}*': {int((~ok).sum())} rows with a zero / "
+                  f"non-finite step; training drops them for any variant using it.")
+        if len(cols) != T:
             print(f"  [ERROR] '{pfx}*' has {len(cols)} steps but velocity has {T}. "
                   f"Not time-aligned.")
 
-    print(f"\n  {'variant':<20} {'mechanism':<15} {'input_dim':>9} "
-          f"{'cond_dim':>8}  available")
-    print("  " + "-" * 74)
+    names = list(VARIANT_TABLE) if variants is None else list(variants)
     usable = []
-    for name, pfx in ALL_VARIANTS.items():
-        mech, idim, cdim = VARIANT_SHAPE[name]
-        ok = pfx is None or channels.get(pfx) is not None
-        print(f"  {name:<20} {mech:<15} {idim:>9} {cdim:>8}  "
-              f"{'yes' if ok else 'NO -- column missing'}")
-        if ok:
+    for name in names:
+        _, _, _, _, extra, cond = variant_spec(name)
+        needs = list(extra) + ([cond] if cond is not None else [])
+        if all(channels.get(p) is not None for p in needs):
             usable.append(name)
+    if not usable:
+        print("  [ERROR] No variant is supported by this CSV.")
+        return
 
-    # Pick rows valid for EVERY available channel so all panels show the same rows.
+    # Rows valid for EVERY available channel, so all panels show the same rows.
     all_ok = np.ones(len(df), dtype=bool)
     for ok in valid_rows.values():
         all_ok &= ok
@@ -101,22 +201,22 @@ def visualize_all_variants(df, num_samples=3, standardize=True):
     idx = cand[np.linspace(0, len(cand) - 1, min(num_samples, len(cand))).astype(int)]
     vel = df[vel_cols].values.astype(np.float32)
 
-    # Standardization constants, computed over the whole subset. The real
-    # dataloader uses TRAIN-SPLIT statistics; these are close enough to show the
-    # scale but are NOT the values training will use.
+    # Standardization constants over the whole subset. The real dataloader uses
+    # TRAIN-SPLIT statistics; these are close enough to show the scale but are
+    # NOT the values training will use.
     stats = {}
     for pfx, W in channels.items():
         if W is None:
             continue
         ok = valid_rows[pfx]
         mn = W[ok].min(axis=1)
-        Wt = model_space[pfx][ok]          # sequence stats in model space
+        Wt = model_space[pfx][ok]
         stats[pfx] = {
             "cond_mean": float(mn.mean()), "cond_std": float(mn.std()) + 1e-8,
             "seq_mean": float(Wt.mean()),  "seq_std": float(Wt.std()) + 1e-8,
         }
 
-    print(f"\n  showing rows {list(idx)}")
+    print(f"\n  showing rows {list(idx)}  for {len(usable)} variants")
     if standardize:
         print("  conditioning / sequence values are STANDARDIZED (subset stats, "
               "not train-split)")
@@ -124,70 +224,82 @@ def visualize_all_variants(df, num_samples=3, standardize=True):
     sns.set_theme(style="whitegrid")
     n_rows = len(usable)
     fig, axes = plt.subplots(n_rows, len(idx),
-                             figsize=(5.2 * len(idx), 2.9 * n_rows),
+                             figsize=(5.6 * len(idx), row_height * n_rows),
                              squeeze=False)
     steps = np.arange(T)
 
     for r, name in enumerate(usable):
-        pfx = ALL_VARIANTS[name]
-        mech, idim, cdim = VARIANT_SHAPE[name]
+        mech, idim, cdim, uses_vel, extra, cond = variant_spec(name)
 
         for c, i in enumerate(idx):
             ax = axes[r][c]
-            ax.plot(steps, vel[i], color="tab:blue", linewidth=1.8,
-                    label="velocity (always)")
-            ax.set_ylabel("v [m/s]", color="tab:blue", fontsize=8)
-            ax.tick_params(axis='y', labelcolor="tab:blue", labelsize=7)
+
+            # Velocity: an input, or context only.
+            if uses_vel:
+                ax.plot(steps, vel[i], color="tab:blue", linewidth=1.8,
+                        label="velocity (input)")
+                ax.set_ylabel("v [m/s]", color="tab:blue", fontsize=8)
+                ax.tick_params(axis='y', labelcolor="tab:blue", labelsize=7)
+            else:
+                ax.plot(steps, vel[i], color="gray", linewidth=1.2,
+                        linestyle="--", alpha=0.7, label="velocity (NOT an input)")
+                ax.set_ylabel("v [m/s]  (unused)", color="gray", fontsize=8)
+                ax.tick_params(axis='y', labelcolor="gray", labelsize=7)
             ax.tick_params(axis='x', labelsize=7)
 
-            if pfx is None:
-                ax.text(0.5, 0.08, "input_dim=1, cond_dim=0",
-                        transform=ax.transAxes, ha="center", fontsize=8,
-                        color="gray")
-
-            elif cdim > 0:
-                W = channels[pfx]
+            if cond is not None:
+                W = channels[cond]
                 raw = float(W[i].min())
-                val = ((raw - stats[pfx]["cond_mean"]) / stats[pfx]["cond_std"]
+                val = ((raw - stats[cond]["cond_mean"]) / stats[cond]["cond_std"]
                        if standardize else raw)
-                ax2 = ax.twinx()
-                ax2.axhline(val, color="tab:red", linestyle="--", linewidth=2.0,
-                            label="cond scalar = min(window)")
+                ax2 = _twin(ax)
+                ax2.axhline(val, color="tab:red", linestyle="--", linewidth=2.0)
                 # Mark WHERE the minimum occurs -- the scalar discards this.
                 ax2.plot([int(W[i].argmin())], [val], marker='v', markersize=9,
                          color="tab:red")
                 ax2.set_ylabel("cond (std)" if standardize else "cond",
                                color="tab:red", fontsize=8)
                 ax2.tick_params(axis='y', labelcolor="tab:red", labelsize=7)
-                ax2.grid(False)
                 ax.text(0.02, 0.06, f"raw min = {raw:.5f}\n1 token, no time axis",
                         transform=ax.transAxes, fontsize=7, color="tab:red")
 
-            else:
-                is_log = pfx in LOG_PREFIXES
+            elif extra:
+                # Standardized channels share one axis (they are comparable);
+                # raw ones each get their own, since kg and w are not.
+                shared = _twin(ax) if standardize else None
+                for k, pfx in enumerate(extra):
+                    is_log = pfx in LOG_PREFIXES
+                    color = _channel_color(pfx, k)
+                    if standardize:
+                        seq = ((model_space[pfx][i] - stats[pfx]["seq_mean"])
+                               / stats[pfx]["seq_std"])
+                        ax2 = shared
+                    else:
+                        seq = channels[pfx][i]
+                        ax2 = _twin(ax, offset=0.14 * k)
+                        ax2.set_ylabel(f"{pfx}*" + (" [kg]" if is_log else ""),
+                                       color=color, fontsize=7)
+                        ax2.tick_params(axis='y', labelcolor=color, labelsize=6)
+                        if is_log:
+                            ax2.set_yscale("log")
+                    ax2.plot(steps, seq, color=color, linewidth=1.6,
+                             label=f"ch{k + int(uses_vel)}: {pfx}")
                 if standardize:
-                    seq = ((model_space[pfx][i] - stats[pfx]["seq_mean"])
-                           / stats[pfx]["seq_std"])
-                    ylab = "log channel (std)" if is_log else "channel (std)"
-                else:
-                    seq = channels[pfx][i]
-                    ylab = f"{pfx}* [kg]" if is_log else f"{pfx}*"
-                color = "tab:brown" if is_log else "tab:purple"
-                ax2 = ax.twinx()
-                ax2.plot(steps, seq, color=color, linewidth=1.6,
-                         label="2nd input channel")
-                if is_log and not standardize:
-                    ax2.set_yscale("log")
-                ax2.set_ylabel(ylab, color=color, fontsize=8)
-                ax2.tick_params(axis='y', labelcolor=color, labelsize=7)
-                ax2.grid(False)
-                ax.text(0.02, 0.06,
-                        f"{pfx}*, {T} steps{', log' if is_log else ''}\n"
-                        f"concatenated, input_dim=2",
-                        transform=ax.transAxes, fontsize=7, color=color)
+                    shared.set_ylabel("channels (std)", fontsize=8)
+                    shared.tick_params(axis='y', labelsize=7)
+                    shared.legend(fontsize=6, loc="upper right")
+                desc = ", ".join(p + ("*, log" if p in LOG_PREFIXES else "*")
+                                 for p in extra)
+                ax.text(0.02, 0.06, f"{desc}\ninput_dim={idim}",
+                        transform=ax.transAxes, fontsize=7, color="dimgray")
+
+            else:
+                ax.text(0.5, 0.08, f"input_dim={idim}, cond_dim={cdim}",
+                        transform=ax.transAxes, ha="center", fontsize=8,
+                        color="gray")
 
             if c == 0:
-                ax.text(-0.28, 0.5, f"{name}\n({mech})", transform=ax.transAxes,
+                ax.text(-0.30, 0.5, f"{name}\n({mech})", transform=ax.transAxes,
                         rotation=90, va="center", ha="center",
                         fontsize=9, fontweight="bold")
             if r == 0:
@@ -200,16 +312,16 @@ def visualize_all_variants(df, num_samples=3, standardize=True):
     fig.suptitle(f"What each INPUT_VARIANT feeds the model (same rows throughout, "
                  f"{'standardized' if standardize else 'raw'})",
                  fontsize=14, fontweight="bold")
-    plt.tight_layout(rect=[0.02, 0, 1, 0.97])
+    plt.tight_layout(rect=[0.03, 0, 1, 0.98])
     plt.show()
 
     # ------------------------------------------------------------------
-    # What the two reductions cost, in one number per channel.
+    # What the scalar reduction costs, in one number per channel.
     # ------------------------------------------------------------------
-    print("\n  Information the SCALAR reduction discards:")
-    for pfx, W in channels.items():
-        # Only the manipulability channels have a scalar (cond) variant.
-        if W is None or pfx in LOG_PREFIXES:
+    print("\n  Information the SCALAR (cond) reduction discards:")
+    for pfx in sorted(_COND_PREFIXES):
+        W = channels.get(pfx)
+        if W is None:
             continue
         mn, mx = W.min(axis=1), W.max(axis=1)
         within = (mx - mn)                  # per-push variation over the window
@@ -320,9 +432,11 @@ def report_arm_columns(df):
         print(f"\n  [NOTE] Effectively constant (relative std < 1e-3): "
               f"{list(dead.index)}")
         print("         These contribute only numerical noise once standardized.")
-        print("         Another argument for ARM_FEATURE_MODE='push_dir' over 'full'.")
 
-    print(f"\n  ARM_FEATURE_COLS in use: {len(ARM_FEATURE_COLS)}")
+    print(f"\n  ARM_FEATURE_COLS (inspection only, NOT model inputs): "
+          f"{len(ARM_FEATURE_COLS)}")
+    print(f"  Model inputs come from the window channels: "
+          f"{', '.join(p + '*' for p in ALL_WINDOW_PREFIXES)}")
 
     if {'obj_yaw_base', 'push_face_index'}.issubset(df.columns):
         by_cell = df.groupby(['obj_yaw_base', 'push_face_index'])[
@@ -379,20 +493,20 @@ def plot_kinematic_distributions(df):
     """
     cols_to_plot = ['obj_yaw_base', 'push_dir_b_x', 'push_dir_b_y']
     available_cols = [c for c in cols_to_plot if c in df.columns]
-    
+
     if not available_cols:
         return
-        
+
     print("\nPlotting Kinematic Distributions (Yaw & Push Directions)...")
     sns.set_theme(style="whitegrid")
     fig, axes = plt.subplots(1, len(available_cols), figsize=(5 * len(available_cols), 5))
-    
+
     if len(available_cols) == 1:
         axes = [axes]
-        
+
     for ax, col in zip(axes, available_cols):
         valid_data = df[col].dropna()
-        
+
         if col == 'obj_yaw_base':
             # Convert to degrees for better interpretability
             data = np.degrees(valid_data)
@@ -402,20 +516,24 @@ def plot_kinematic_distributions(df):
             data = valid_data
             xlabel = col
             color = "#1f77b4"
-            
+
         sns.histplot(data, kde=True, color=color, ax=ax, bins=50)
         ax.set_title(f"Distribution of {col}")
         ax.set_xlabel(xlabel)
         ax.set_ylabel("Count")
-        
+
     plt.tight_layout()
     plt.show()
 
 
 def report_variant_window(df, num_samples=6):
-    """Visualize the per-step window channel the active INPUT_VARIANT feeds in.
+    """Visualize the window channels the ACTIVE INPUT_VARIANT feeds in.
 
-    Four panels:
+    Runs once per manipulability channel the variant uses (the inertial ones
+    have their own report, since max rather than min is their adverse reduction
+    and there is no whole-push column to compare against).
+
+    Four panels per channel:
       1. A handful of raw sequences, so the within-push shape is visible at all.
       2. Mean +/- 1 std envelope across the subset, with the two scalar
          reductions marked: the window minimum (what the *_cond variants use)
@@ -428,47 +546,53 @@ def report_variant_window(df, num_samples=6):
          actually move this quantity?
     """
     print("\n" + "=" * 70)
-    print(f"INPUT VARIANT WINDOW CHANNEL: {INPUT_VARIANT}")
+    print(f"INPUT VARIANT WINDOW CHANNELS: {INPUT_VARIANT}")
     print("=" * 70)
 
-    if VARIANT_WINDOW_PREFIX is None:
-        print("  INPUT_VARIANT='vel_only': no window channel is used.")
-        print("  Set INPUT_VARIANT to one of the manip/dirmanip variants to "
-              "inspect it.")
+    if not VARIANT_STATS_CHANNELS:
+        print(f"  INPUT_VARIANT='{INPUT_VARIANT}': velocity only, no window channel.")
+        print("  Set INPUT_VARIANT to any other variant to inspect one.")
         print("=" * 70 + "\n")
         return
 
-    if VARIANT_WINDOW_PREFIX in LOG_PREFIXES:
-        # Inertial channels have their own report (max is the adverse reduction,
-        # and there is no whole-push column to compare against).
-        print(f"  '{VARIANT_WINDOW_PREFIX}*' is an inertial channel; see "
-              f"report_inertial_window below.")
+    manip = [p for p in VARIANT_STATS_CHANNELS if p not in LOG_PREFIXES]
+    inertial = [p for p in VARIANT_STATS_CHANNELS if p in LOG_PREFIXES]
+    if inertial:
+        print(f"  inertial channels {inertial} are covered by report_inertial_window "
+              f"below.")
+    if not manip:
         print("=" * 70 + "\n")
         return
 
-    wcols = window_cols(df, VARIANT_WINDOW_PREFIX)
+    for pfx in manip:
+        _report_one_manip_window(df, pfx, num_samples)
+
+
+def _report_one_manip_window(df, prefix, num_samples=6):
+    wcols = window_cols(df, prefix)
     if not wcols:
-        print(f"  [WARNING] No '{VARIANT_WINDOW_PREFIX}*' columns in this CSV.")
+        print(f"\n  [WARNING] No '{prefix}*' columns in this CSV.")
         print(f"            The variant '{INPUT_VARIANT}' cannot be trained on it.")
-        print("=" * 70 + "\n")
         return
 
+    is_cond = prefix == VARIANT_COND_PREFIX
     W = df[wcols].values.astype(np.float32)          # (N, T)
     T = W.shape[1]
     win_min = W.min(axis=1)
-    win_mean = W.mean(axis=1)
 
     # The whole-push counterpart, for the comparison in panels 2 and 3.
-    whole_col = ('worst_manipulability' if VARIANT_WINDOW_PREFIX == 'arm_manip_w'
+    whole_col = ('worst_manipulability' if prefix == 'arm_manip_w'
                  else 'worst_dir_manipulability')
     whole = df[whole_col].values.astype(np.float32) if whole_col in df.columns else None
 
     vel_cols = sorted([c for c in df.columns if "input_vel_" in c],
                       key=lambda x: int(x.split('_')[-1]))
 
-    print(f"  channel        : {VARIANT_WINDOW_PREFIX}0..{T - 1}  ({T} steps)")
+    print(f"\n  channel        : {prefix}0..{T - 1}  ({T} steps), fed as "
+          f"{'a cond token' if is_cond else 'an input channel'}")
     print(f"  velocity input : input_vel_0..{len(vel_cols) - 1}  "
-          f"({len(vel_cols)} steps)")
+          f"({len(vel_cols)} steps)"
+          + ("" if USE_VEL else "   [NOT fed to the model by this variant]"))
     if len(vel_cols) != T:
         print(f"  [ERROR] Length mismatch: the two channels are NOT time-aligned. "
               f"create_dataloaders will refuse this.")
@@ -478,6 +602,9 @@ def report_variant_window(df, num_samples=6):
     print(f"  window minimum : mean {win_min.mean():.6f}  "
           f"range [{win_min.min():.6f}, {win_min.max():.6f}]  "
           f"std {win_min.std():.6f}")
+    if not is_cond:
+        print("     The minimum is shown for comparison with the *_cond variants; "
+              "this\n     variant feeds the whole sequence, not the minimum.")
 
     if whole is not None:
         print(f"  whole-push min : mean {whole.mean():.6f}  "
@@ -501,7 +628,7 @@ def report_variant_window(df, num_samples=6):
     sns.set_theme(style="whitegrid")
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
     steps = np.arange(T)
-    label = ("Manipulability w" if VARIANT_WINDOW_PREFIX == 'arm_manip_w'
+    label = ("Manipulability w" if prefix == 'arm_manip_w'
              else "Directional manipulability $w_{dir}$")
 
     # --- Panel 1: raw sequences ---
@@ -512,7 +639,7 @@ def report_variant_window(df, num_samples=6):
                 label=f"row {i} (min {W[i].min():.4f})")
     ax.set_xlabel("Window step (aligned to input_vel_*)")
     ax.set_ylabel(label)
-    ax.set_title(f"{num_samples} raw sequences")
+    ax.set_title(f"{len(idx)} raw sequences")
     ax.legend(fontsize=7)
     ax.grid(True, alpha=0.3)
 
@@ -578,7 +705,7 @@ def report_variant_window(df, num_samples=6):
     ax.grid(True, alpha=0.3)
 
     fig.suptitle(f"INPUT_VARIANT = '{INPUT_VARIANT}'   channel "
-                 f"'{VARIANT_WINDOW_PREFIX}*'   (N={len(df)})",
+                 f"'{prefix}*'   (N={len(df)})",
                  fontsize=14, fontweight="bold")
     plt.tight_layout()
     plt.show()
@@ -587,7 +714,7 @@ def report_variant_window(df, num_samples=6):
 
 
 def compare_variant_channels(df):
-    """Both window channels side by side, whichever variant is active.
+    """Both manipulability channels side by side, whichever variant is active.
 
     The scalar correlation between them decides whether w_dir is worth a
     separate variant at all: near 1.0 and it is a relabelling of w.
@@ -613,6 +740,8 @@ def compare_variant_channels(df):
     print("     w is a 6-D ellipsoid VOLUME, w_dir a single RADIUS along the push")
     print("     direction, so the magnitudes are not comparable. What matters is")
     print("     the correlation: near 1.0 and w_dir adds nothing beyond w.")
+    print("     This also prices the *_manip vs *_dirmanip pairing of every")
+    print("     two-channel variant (osim_manip vs osim_dirmanip, eff_* likewise).")
 
     sns.set_theme(style="whitegrid")
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
@@ -656,6 +785,9 @@ def compare_variant_channels(df):
 # with Lambda = (J M^-1 J^T)^-1, J in the raw Isaac [linear, angular] row order.
 # off_policy_algorithm.get_arm_window slices them on the SAME window as
 # input_vel_*, so arm_meff_w{t} / arm_lam_w{t} line up with input_vel_{t}.
+#
+# These two are the FIRST channel of every velocity-free variant (osim_*, eff_*),
+# so what this report shows is the entire object signal those variants get.
 INERTIAL_CHANNELS = {
     # prefix          (label,                                   at-impact column,     color)
     "arm_meff_w": (r"Effective mass $m_{eff}(u)$ [kg]",          "arm_meff_at_impact", "tab:green"),
@@ -684,8 +816,12 @@ def report_inertial_window(df, num_samples=6, log_scale=False):
     print("\n" + "=" * 70)
     print("INERTIAL WINDOW CHANNELS  (m_eff, Lambda)")
     print("=" * 70)
+    print("  These are the leading channel of osim_only, osim_manip, osim_dirmanip,")
+    print("  eff_only, eff_manip and eff_dirmanip -- variants that feed NO velocity,")
+    print("  so whatever object signal they have must be visible here.")
 
-    vel_cols = window_cols(df, "input_vel_")
+    vel_cols = sorted([c for c in df.columns if "input_vel_" in c],
+                      key=lambda x: int(x.split('_')[-1]))
     T_vel = len(vel_cols)
 
     data = {}
@@ -712,7 +848,9 @@ def report_inertial_window(df, num_samples=6, log_scale=False):
               f"range [{np.nanmin(W):.4f}, {np.nanmax(W):.4f}] kg")
         if n_bad_rows:
             print(f"    [WARNING] {n_bad_rows} rows contain zero / non-finite values "
-                  f"(failed solve or singular Lambda). Excluded from the stats below.")
+                  f"(failed solve or singular Lambda). Excluded from the stats below,")
+            print(f"              and dropped outright by create_dataloaders for any "
+                  f"variant that reads this channel.")
         good = ~bad.any(axis=1)
         Wg = W[good]
         if len(Wg) == 0:
@@ -741,8 +879,8 @@ def report_inertial_window(df, num_samples=6, log_scale=False):
         p50, p99 = np.percentile(win_max, [50, 99])
         if p99 > 10 * p50:
             print(f"    [NOTE] heavy tail: p99 {p99:.3f} > 10x median {p50:.3f}. "
-                  f"Consider log_scale=True, and a log transform before "
-                  f"standardizing if this becomes an input channel.")
+                  f"Consider log_scale=True. The log transform configs applies "
+                  f"before standardizing is there for exactly this.")
 
         data[pfx] = dict(W=W, good=good, win_max_all=np.where(good, W.max(axis=1), np.nan))
 
@@ -863,7 +1001,8 @@ def report_inertial_window(df, num_samples=6, log_scale=False):
         ax.set_title(f"m_eff vs Lambda   corr = {corr:+.3f}")
         print(f"\n  corr(window max m_eff, window max Lambda) = {corr:+.4f}")
         print("     m_eff depends on the push direction; lam_mean does not. Near 1.0 "
-              "means\n     the direction adds little beyond the overall inertia level.")
+              "means\n     the direction adds little beyond the overall inertia level, "
+              "and the\n     eff_* variants should behave like the osim_* ones.")
         if log_scale:
             ax.set_xscale("log"); ax.set_yscale("log")
     else:
@@ -898,9 +1037,9 @@ def report_inertial_window(df, num_samples=6, log_scale=False):
         ax.set_ylabel("window max $m_{eff}$ [kg]")
         ax.set_title(f"Inertial vs kinematic   corr = {corr:+.3f}")
         print(f"  corr(window max m_eff, window min w_dir) = {corr:+.4f}")
-        print("     Near +/-1 means m_eff is largely a relabelling of w_dir; low |corr| "
-              "means\n     the inertial channel carries information the kinematic one "
-              "does not.")
+        print("     Near +/-1 means m_eff is largely a relabelling of w_dir, so pairing "
+              "them\n     in eff_dirmanip buys little; low |corr| means the two channels "
+              "are\n     complementary and the pairing is worth training.")
         if log_scale:
             ax.set_yscale("log")
     else:
@@ -942,9 +1081,9 @@ def report_inertial_window(df, num_samples=6, log_scale=False):
 # =============================================================================
 # CHANNEL INFORMATIVENESS  (why a variant can collapse)
 #
-# A variant's second input channel is standardized with ONE mean/std computed
-# over the whole sweep: z = (x - mean) / std, on log(x) for the inertial
-# channels. Two things follow, and both are checked here:
+# Each input channel is standardized with ONE mean/std computed over the whole
+# sweep: z = (x - mean) / std, on log(x) for the inertial channels. Two things
+# follow, and both are checked here:
 #
 #   1. If the channel barely varies in training, std is tiny and it carries no
 #      information about the object -- every push looks the same to the model.
@@ -957,6 +1096,10 @@ def report_inertial_window(df, num_samples=6, log_scale=False):
 #   within-push   variation across the 60 steps of one push
 #   between-push  variation of the per-push means
 # A channel that is flat within a push AND flat between pushes is a constant.
+#
+# This matters more for the velocity-free variants than for anything else: if
+# their only channel is flat, the model has no input that distinguishes one
+# push from another, and its output can only be a constant.
 # =============================================================================
 INFORMATIVENESS_OFFSETS = (0.05, 0.10, 0.28)     # relative offsets to price in z
 
@@ -968,9 +1111,8 @@ def report_channel_informativeness(df, min_rel_std=0.02):
     print("  Values are in MODEL SPACE: log(x) for the inertial channels "
           "(arm_meff_w, arm_lam_w),\n  raw for the manipulability channels.")
 
-    prefixes = sorted({p for p in ALL_VARIANTS.values() if p is not None})
     rows = []
-    for pfx in prefixes:
+    for pfx in ALL_WINDOW_PREFIXES:
         W, valid, cols = variant_window(df, prefix=pfx,
                                         log_transform=pfx in LOG_PREFIXES)
         if not cols:
@@ -995,8 +1137,17 @@ def report_channel_informativeness(df, min_rel_std=0.02):
         within = float(np.mean(W.std(axis=1)))
         between = float(row_mean.std())
 
+        used_by = [n for n in VARIANT_TABLE
+                   if pfx in (tuple(VARIANT_TABLE[n][0])
+                              + ((VARIANT_TABLE[n][1],) if VARIANT_TABLE[n][1] else ()))]
+        novel = [n for n in used_by if not variant_spec(n)[3]]
+
         print(f"\n  [{pfx}*]   {'log space' if is_log else 'raw'}   "
               f"N={len(W)} pushes x {W.shape[1]} steps")
+        print(f"    used by          {', '.join(used_by)}")
+        if novel:
+            print(f"    of which velocity-free: {', '.join(novel)}  "
+                  f"(this channel is their ONLY object signal)")
         print(f"    standardization  mean {mean:+.6f}   std {std:.6f}   "
               f"relative variation {100 * rel:.2f}%")
         if is_log:
@@ -1023,7 +1174,9 @@ def report_channel_informativeness(df, min_rel_std=0.02):
         # Does the channel say anything about the object? It should not: the arm
         # follows the same trajectory whatever is on the table. A near-zero
         # correlation with gt_mass is expected and is the point -- the channel is
-        # supposed to describe the ARM, not the object.
+        # supposed to describe the ARM, not the object. For the velocity-free
+        # variants that is the whole difficulty: nothing in their input is about
+        # the object at all.
         for tgt in ("gt_mass", "gt_mu", "obj_yaw_base"):
             if tgt not in df.columns:
                 continue
@@ -1042,6 +1195,9 @@ def report_channel_informativeness(df, min_rel_std=0.02):
                   f"sim-to-real offset arrives at "
                   f"z={np.log1p(INFORMATIVENESS_OFFSETS[-1]) * amp if is_log else INFORMATIVENESS_OFFSETS[-1] * abs(mean) * amp:+.0f},")
             print(f"              which saturates the model and collapses its output.")
+            if novel:
+                print(f"              {', '.join(novel)} have no other input, so they "
+                      f"cannot do better\n              than predict a constant.")
 
         # Where the variation lives across the sweep. The pushes ARE multi-angle,
         # so if a channel is meant to describe the arm's configuration it should
@@ -1066,9 +1222,9 @@ def report_channel_informativeness(df, min_rel_std=0.02):
 
         rows.append((pfx, mean, std, rel, within, between, amp, flat))
 
-
-
     if len(rows) > 1:
+        by_pfx = {r[0]: r for r in rows}
+
         print("\n  " + "-" * 74)
         print(f"  {'channel':<18}{'std':>10}{'variation':>12}{'within':>10}"
               f"{'between':>10}{'x amplif':>10}")
@@ -1083,6 +1239,26 @@ def report_channel_informativeness(df, min_rel_std=0.02):
               f"{most[3] / max(least[3], 1e-12):.0f}x flatter.")
         print("  A flatter channel is both less informative and more fragile: the same")
         print("  real-world offset arrives that many times further out in z.")
+
+        # ---- per-variant roll-up ----
+        print("\n  " + "-" * 74)
+        print("  PER-VARIANT ROLL-UP  (weakest channel decides how fragile a variant is)")
+        print(f"  {'variant':<20}{'vel':>6}  {'channels':<36}{'weakest variation'}")
+        for name in VARIANT_TABLE:
+            mech, idim, cdim, uses_vel, extra, cond = variant_spec(name)
+            needs = list(extra) + ([cond] if cond is not None else [])
+            have = [p for p in needs if p in by_pfx]
+            if needs and not have:
+                continue
+            if not needs:
+                note = "velocity only"
+            else:
+                worst = min(have, key=lambda p: by_pfx[p][3])
+                note = f"{worst} {100 * by_pfx[worst][3]:.2f}%"
+            print(f"  {name:<20}{str(uses_vel):>6}  "
+                  f"{str(needs if needs else ['-']):<36}{note}")
+        print("     A velocity-free variant with a flat weakest channel has nothing left")
+        print("     to distinguish pushes; one with velocity still has the velocity dip.")
     print("=" * 78 + "\n")
 
 
@@ -1090,14 +1266,14 @@ def report_channel_informativeness(df, min_rel_std=0.02):
 # PER-PLOT NUMERIC ANALYSIS
 # =============================================================================
 
-TARGET_PUSH_SPEED = 0.08     
+TARGET_PUSH_SPEED = 0.08
 
 def _verdict(ok, bad="CHECK"):
     return "OK" if ok else f"*** {bad} ***"
 
 def analyze_velocity(vel, sample_id):
     T = len(vel)
-    tail = vel[T // 2:]                       
+    tail = vel[T // 2:]
     plateau, plateau_std = float(tail.mean()), float(tail.std())
     err_pct = 100 * abs(plateau - TARGET_PUSH_SPEED) / TARGET_PUSH_SPEED
     flat_pct = 100 * plateau_std / max(abs(plateau), 1e-9)
@@ -1114,6 +1290,10 @@ def analyze_velocity(vel, sample_id):
     if vel.min() < 0:
         print(f"    [NOTE] velocity goes negative (min {vel.min():.4f}) -- retraction "
               f"or a frame-sign issue has leaked into the window")
+    if not USE_VEL:
+        print(f"    [NOTE] INPUT_VARIANT='{INPUT_VARIANT}' does NOT feed velocity to the "
+              f"model. It still\n           drives the PINN sliding mask, so these "
+              f"checks still matter.")
 
 def analyze_acceleration(acc, sample_id):
     T = len(acc)
@@ -1191,7 +1371,7 @@ def analyze_friction(fric_calc, fric_sim, normal_sim, gt_mu, sample_id):
 
 def inspect_samples(df, num_samples=3):
     """
-    Extracts elements directly from the DataFrame instead of the PyTorch DataLoader 
+    Extracts elements directly from the DataFrame instead of the PyTorch DataLoader
     so we can access raw object yaws and unstandardized arm states safely.
     Samples are evenly spaced to ensure variety in object yaw.
     """
@@ -1199,34 +1379,34 @@ def inspect_samples(df, num_samples=3):
     vel_cols = sorted([c for c in df.columns if "input_vel_" in c], key=lambda x: int(x.split('_')[-1]))
     seq_len = len(acc_cols)
     time_steps = np.arange(seq_len)
-    
+
     colors = {
-        'vel': '#1f77b4',       
-        'acc': '#d62728',       
-        'robot': '#2ca02c',     
-        'friction': '#ff7f0e',  
-        'net_sim': '#7f7f7f',   
-        'net_calc': '#9467bd',  
-        'theory': '#17becf'     
+        'vel': '#1f77b4',
+        'acc': '#d62728',
+        'robot': '#2ca02c',
+        'friction': '#ff7f0e',
+        'net_sim': '#7f7f7f',
+        'net_calc': '#9467bd',
+        'theory': '#17becf'
     }
-    
+
     sns.set_theme(style="whitegrid")
-    
+
     # Grab evenly spaced indices to avoid looking only at the very first yaw
     sample_indices = np.linspace(0, len(df) - 1, min(num_samples, len(df)), dtype=int)
-    
+
     for i in sample_indices:
         row = df.iloc[i]
-        
+
         gt_mass = row['gt_mass']
         gt_mu = row['gt_mu']
-        
+
         # Raw kinematics mapping
         yaw_base = row['obj_yaw_base'] if 'obj_yaw_base' in row else float('nan')
 
         vel_x = row[vel_cols].values.astype(float)
         acc_x = row[acc_cols].values.astype(float)
-        
+
         st = int(row['start_t'])
         window_range = range(st, st + seq_len)
 
@@ -1245,13 +1425,15 @@ def inspect_samples(df, num_samples=3):
             fx_robot_sim = np.array([row[f"pinn_robot_wrench_t{t}_ax5"] for t in window_range])
 
         yaw_title_str = f"| Yaw: {np.degrees(yaw_base):.1f}°" if not np.isnan(yaw_base) else ""
-        
+
         fig, axes = plt.subplots(5, 1, figsize=(14, 20), sharex=False)
-        
+
         # -----------------------------------------------------------
         # PLOT 1: Velocity
         # -----------------------------------------------------------
-        axes[0].plot(time_steps, vel_x, color=colors['vel'], marker='o', markersize=4, linewidth=2, label='Extracted EE Velocity')
+        vel_label = ('Extracted EE Velocity' if USE_VEL
+                     else 'Extracted EE Velocity (NOT a model input for this variant)')
+        axes[0].plot(time_steps, vel_x, color=colors['vel'], marker='o', markersize=4, linewidth=2, label=vel_label)
         axes[0].set_title(f"1. Model Input: Kinematics (Velocity) {yaw_title_str}")
         axes[0].set_ylabel("Velocity [m/s]")
         axes[0].legend(loc='upper left')
@@ -1269,13 +1451,13 @@ def inspect_samples(df, num_samples=3):
               f"   push_face = {face}   collect_idx = {cidx}{push_str}")
         print("=" * 70)
         analyze_velocity(vel_x, i)
-        
+
         # -----------------------------------------------------------
         # PLOT 2: Acceleration
         # -----------------------------------------------------------
         axes[1].plot(time_steps, acc_x, color=colors['acc'], marker='o', markersize=4, linewidth=2, label='Extracted EE Acceleration')
         axes[1].set_title(f"2. Model Input: Kinematics (Acceleration) {yaw_title_str}")
-        axes[1].set_ylabel("Acceleration [m/s\u00b2]")
+        axes[1].set_ylabel("Acceleration [m/s²]")
         axes[1].legend(loc='upper left')
 
         analyze_acceleration(acc_x, i)
@@ -1287,14 +1469,14 @@ def inspect_samples(df, num_samples=3):
             normal_force_calc = np.clip((gt_mass * G) - fz_robot_sim, 0.0, None)
         elif FRAME_MODE == "local":
             normal_force_calc = np.clip((gt_mass * G) + fz_robot_sim, 0.0, None)
-        
-        fric_magnitude_calc = gt_mu * normal_force_calc 
+
+        fric_magnitude_calc = gt_mu * normal_force_calc
         fric_magnitude_sim = gt_mu * np.abs(fz_normal_sim)
-        
+
         fx_friction_vector = -fric_magnitude_sim
         calc_net_force_x = fx_robot_sim + fx_friction_vector
         mass_x_accel = gt_mass * acc_x_sim
-        
+
         # -----------------------------------------------------------
         # PLOT 3: Force Decomposition
         # -----------------------------------------------------------
@@ -1302,33 +1484,33 @@ def inspect_samples(df, num_samples=3):
         axes[2].plot(time_steps, fx_robot_sim, label=r'Robot Applied Force ($F_{robot}$)', color=colors['robot'], linewidth=2)
         axes[2].plot(time_steps, fx_friction_vector, label=r'Table Friction ($-F_{fric}$)', color=colors['friction'], linewidth=2)
         axes[2].plot(time_steps, calc_net_force_x, label=r'Calculated Net Force ($F_{robot} - F_{fric}$)', color=colors['net_calc'], linestyle='--', linewidth=2)
-        
+
         axes[2].set_title(f"3. Force Components Decomposition (X-Axis) {yaw_title_str}")
         axes[2].set_ylabel("Force [N]")
         axes[2].legend(loc='upper left')
 
         analyze_force_decomposition(net_fx_sim, fx_robot_sim, fx_friction_vector, calc_net_force_x, i)
-        
+
         # -----------------------------------------------------------
         # PLOT 4: Newton's Second Law Check
         # -----------------------------------------------------------
         axes[3].plot(time_steps, net_fx_sim, label=r'Simulator Net Force ($F_{net}$)', color=colors['net_sim'], linewidth=4, alpha=0.4)
         axes[3].plot(time_steps, calc_net_force_x, label=r'Force Sum ($F_{robot} - F_{fric}$)', color=colors['net_calc'], linewidth=2)
         axes[3].plot(time_steps, mass_x_accel, label=r"Newton's 2nd Law ($m \cdot a_x$)", color=colors['theory'], linestyle='--', linewidth=2.5)
-        
+
         axes[3].set_title(f"4. Physics Check: Newton's 2nd Law Alignment {yaw_title_str}")
         axes[3].set_ylabel("Force [N]")
         add_min_max_text(axes[3], net_fx_sim, "N")
         axes[3].legend(loc='upper left')
 
         analyze_newton(net_fx_sim, mass_x_accel, acc_x_sim, gt_mass, i)
-    
+
         # -----------------------------------------------------------
         # PLOT 5: Friction Model Check
         # -----------------------------------------------------------
         axes[4].plot(time_steps, fric_magnitude_calc, label=r'Theoretical Friction ($\mu \cdot N_{calc}$)', color=colors['theory'], linewidth=2)
         axes[4].plot(time_steps, fric_magnitude_sim, label=r'Simulator Friction ($\mu \cdot N_{sim}$)', color=colors['friction'], linestyle='--', linewidth=2.5)
-        
+
         axes[4].set_title(f"5. Physics Check: Coulomb Friction Model (Magnitudes) {yaw_title_str}")
         axes[4].set_ylabel("Force Magnitude [N]")
         axes[4].set_xlabel("Time Step")
@@ -1337,10 +1519,10 @@ def inspect_samples(df, num_samples=3):
 
         analyze_friction(fric_magnitude_calc, fric_magnitude_sim, fz_normal_sim, gt_mu, i)
         print()
-        
+
         for ax in axes:
             ax.grid(True, linestyle=':', alpha=0.6)
-            
+
         fig.tight_layout()
         plt.show()
 
@@ -1348,8 +1530,8 @@ def inspect_samples(df, num_samples=3):
 def inspect_velocity_vs_yaw(df):
     """
     Finds a specific set of physical properties (same ground truth mass and mu)
-    that has multiple object yaw variations and both push faces. 
-    Plots their EE velocity sequences separated by push_face_index to visualize 
+    that has multiple object yaw variations and both push faces.
+    Plots their EE velocity sequences separated by push_face_index to visualize
     the variance caused strictly by the robot's kinematic configuration.
     """
     if 'obj_yaw_base' not in df.columns or 'push_face_index' not in df.columns:
@@ -1358,7 +1540,7 @@ def inspect_velocity_vs_yaw(df):
 
     # Group by physical properties to find a set that contains a full multi-angle sweep
     grouped = df.groupby(['gt_mass', 'gt_mu'])
-    
+
     target_group = None
     for name, group in grouped:
         # Look for a physical property pair that has a diverse spread of orientations
@@ -1366,46 +1548,100 @@ def inspect_velocity_vs_yaw(df):
         if group['obj_yaw_base'].nunique() > 5 and group['push_face_index'].nunique() > 1:
             target_group = group
             break
-            
+
     if target_group is None:
         print("[WARNING] Could not find a (mass, mu) pair with multiple yaw angles and both push faces.")
         return
 
     gt_mass = target_group.iloc[0]['gt_mass']
     gt_mu = target_group.iloc[0]['gt_mu']
-    
+
     vel_cols = sorted([c for c in df.columns if "input_vel_" in c], key=lambda x: int(x.split('_')[-1]))
     seq_len = len(vel_cols)
     time_steps = np.arange(seq_len)
-    
+
     # Sort to ensure colormap maps cleanly
     target_group = target_group.sort_values('obj_yaw_base')
-    
+
     fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
-    
+
     norm = plt.Normalize(target_group['obj_yaw_base'].min(), target_group['obj_yaw_base'].max())
     sm = plt.cm.ScalarMappable(cmap='twilight', norm=norm)
-    
+
     for face_idx in [0, 1]:
         ax = axes[face_idx]
         sub_group = target_group[target_group['push_face_index'] == face_idx]
-        
+
         for _, row in sub_group.iterrows():
             vel_x = row[vel_cols].values.astype(float)
             yaw = row['obj_yaw_base']
             ax.plot(time_steps, vel_x, color=sm.to_rgba(yaw), linewidth=2, alpha=0.8)
-            
+
         ax.set_title(f"Push Face Index: {face_idx}")
         ax.set_xlabel("Time Step")
         if face_idx == 0:
             ax.set_ylabel("Extracted EE Velocity [m/s]")
         ax.grid(True, linestyle=':', alpha=0.6)
-        
+
     cbar = fig.colorbar(sm, ax=axes, orientation='vertical', fraction=0.02, pad=0.04)
     cbar.set_label('Object Yaw Base (rad)')
-    
+
     fig.suptitle(f"EE Velocity Sequence vs Object Yaw & Push Face\nFixed Properties: Mass = {gt_mass:.4f} kg, Mu = {gt_mu:.4f}")
-    
+
+    plt.show()
+
+
+def inspect_channel_vs_yaw(df, prefix=None):
+    """The same question as inspect_velocity_vs_yaw, asked of a window channel.
+
+    For a velocity-free variant this is the plot that matters: if the channel's
+    sequences do not separate by object yaw for FIXED (mass, mu), then nothing
+    the model receives distinguishes those pushes.
+    """
+    prefix = prefix or (VARIANT_STATS_CHANNELS[0] if VARIANT_STATS_CHANNELS else None)
+    if prefix is None:
+        return
+    cols = window_cols(df, prefix)
+    if not cols or not {'obj_yaw_base', 'push_face_index'}.issubset(df.columns):
+        print(f"[WARNING] Cannot plot '{prefix}*' vs yaw (missing columns).")
+        return
+
+    target = None
+    for _, group in df.groupby(['gt_mass', 'gt_mu']):
+        if group['obj_yaw_base'].nunique() > 5 and group['push_face_index'].nunique() > 1:
+            target = group
+            break
+    if target is None:
+        print("[WARNING] No (mass, mu) pair with multiple yaws and both push faces.")
+        return
+
+    gt_mass, gt_mu = target.iloc[0]['gt_mass'], target.iloc[0]['gt_mu']
+    target = target.sort_values('obj_yaw_base')
+    steps = np.arange(len(cols))
+    is_log = prefix in LOG_PREFIXES
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+    norm = plt.Normalize(target['obj_yaw_base'].min(), target['obj_yaw_base'].max())
+    sm = plt.cm.ScalarMappable(cmap='twilight', norm=norm)
+
+    for face_idx in [0, 1]:
+        ax = axes[face_idx]
+        sub = target[target['push_face_index'] == face_idx]
+        for _, row in sub.iterrows():
+            ax.plot(steps, row[cols].values.astype(float),
+                    color=sm.to_rgba(row['obj_yaw_base']), linewidth=2, alpha=0.8)
+        ax.set_title(f"Push Face Index: {face_idx}")
+        ax.set_xlabel("Window step")
+        if face_idx == 0:
+            ax.set_ylabel(f"{prefix}*" + (" [kg]" if is_log else ""))
+        if is_log:
+            ax.set_yscale("log")
+        ax.grid(True, linestyle=':', alpha=0.6)
+
+    cbar = fig.colorbar(sm, ax=axes, orientation='vertical', fraction=0.02, pad=0.04)
+    cbar.set_label('Object Yaw Base (rad)')
+    fig.suptitle(f"'{prefix}*' vs Object Yaw & Push Face\n"
+                 f"Fixed Properties: Mass = {gt_mass:.4f} kg, Mu = {gt_mu:.4f}")
     plt.show()
 
 
@@ -1481,13 +1717,13 @@ def main():
         return
 
     print(f"Loading data in chunks to prevent memory crash...")
-    
+
     chunk_list = []
-    
+
     try:
         # Read in chunks of 15,000 rows
         for chunk in pd.read_csv(CSV_PATH, chunksize=15000):
-            
+
             # If the dataset is Multi-Angle, keep only the first 50 environments (out of 512)
             # This perfectly preserves the 20-angle sweeps while dropping ~90% of the massive file
             if MULTI_ANGLE and 'env_id' in chunk.columns:
@@ -1495,19 +1731,19 @@ def main():
             else:
                 # Fallback for Single-Angle dataset: just grab a random 10% slice
                 chunk = chunk.sample(frac=0.1, random_state=42)
-            
+
             # Downcast to 32-bit floats to halve the remaining memory footprint
             float_cols = chunk.select_dtypes(include=['float64']).columns
             chunk[float_cols] = chunk[float_cols].astype(np.float32)
-            
+
             if 'gt_fric_force' in chunk.columns:
                 chunk['gt_fric_force'] = chunk['gt_fric_force'].apply(clean_force_col)
-                
+
             chunk_list.append(chunk)
-            
+
         df = pd.concat(chunk_list, ignore_index=True)
         print(f"Successfully loaded a representative subset! Rows: {df.shape[0]}, Columns: {df.shape[1]}")
-        
+
     except MemoryError:
         print("\n[FATAL] Still ran out of memory! Your system RAM is too small even for chunking.")
         return
@@ -1520,26 +1756,28 @@ def main():
           f"MULTI_ANGLE={MULTI_ANGLE}, USE_ARM_STATE={USE_ARM_STATE})")
     print("="*50)
     print(f"Representative Subset (Rows): {len(df)}")
-    
+    print(f"INPUT_VARIANT: {INPUT_VARIANT}  channels={list(VARIANT_CHANNELS)}  "
+          f"cond={VARIANT_COND_PREFIX}  input_dim={INPUT_DIM}  use_vel={USE_VEL}")
+
     if 'gt_mass' in df.columns and 'gt_mu' in df.columns:
         print("\n[Ground Truth Statistics]")
         print(df[['gt_mass', 'gt_mu']].describe().round(4))
         print("="*50 + "\n")
-        
+
         # Plot Global Distributions
         sns.set_theme(style="whitegrid")
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-        
+
         sns.histplot(data=df, x='gt_mass', kde=True, color='#9467bd', ax=axes[0])
         axes[0].set_title(f"Ground Truth Mass Distribution (Subset N={len(df)})")
         axes[0].set_xlabel("Mass [kg]")
         axes[0].set_ylabel("Count")
-        
+
         sns.histplot(data=df, x='gt_mu', kde=True, color='#ff7f0e', ax=axes[1])
         axes[1].set_title(f"Ground Truth Friction Distribution (Subset N={len(df)})")
-        axes[1].set_xlabel("Friction Coefficient (\u03bc)")
+        axes[1].set_xlabel("Friction Coefficient (μ)")
         axes[1].set_ylabel("Count")
-        
+
         plt.tight_layout()
         plt.show()
     else:
@@ -1547,26 +1785,31 @@ def main():
     # =======================================================
 
     if MULTI_ANGLE:
+        report_variant_catalogue(df)
         report_multi_angle_coverage(df)
         report_arm_columns(df)
         plot_kinematic_distributions(df)
+        # 13 variants make a very tall figure; pass variants=[...] to narrow it.
         visualize_all_variants(df, standardize=False)
         report_variant_window(df)
         compare_variant_channels(df)
         report_inertial_window(df, log_scale=False)
         report_channel_informativeness(df)
-    
+
     # We only need the DataFrame filtered by domain for this script
     _, _, seq_len, df_filtered, _ = create_dataloaders(
         df, batch_size=64, m_seen_min=M_SEEN_MIN, m_seen_max=M_SEEN_MAX, mu_seen_min=MU_SEEN_MIN, mu_seen_max=MU_SEEN_MAX
     )
-    
+
     print(f"Inspecting training dataloader batches natively from DataFrame...")
     inspect_samples(df_filtered, num_samples=3)
-    
+
     if MULTI_ANGLE:
         print("\nPlotting EE Velocity Variance vs Object Yaw...")
         inspect_velocity_vs_yaw(df_filtered)
+        if VARIANT_STATS_CHANNELS:
+            print(f"\nPlotting '{VARIANT_STATS_CHANNELS[0]}*' Variance vs Object Yaw...")
+            inspect_channel_vs_yaw(df_filtered)
 
 
 if __name__ == "__main__":

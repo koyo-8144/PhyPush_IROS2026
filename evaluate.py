@@ -94,7 +94,7 @@ if not time or time.startswith("<"):
         f"({gripper_folder_name}). Train it, then put its run timestamp in "
         f"RUN_TIMESTAMPS above.")
 
-train_from = "from_20260916"
+train_from = "from_20261007"
 
 CHECKPOINT_DIR = f"./results/checkpoints/{train_from}/{gripper_folder_name}/{time}/{model}"
 

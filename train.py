@@ -156,7 +156,7 @@ def main():
     # ==========================================
     # 2. PATHS & SAVING CONFIG
     # ==========================================
-    train_from = "from_20260916"
+    train_from = "from_20261007"
     if GRIPPER_CLOSED:
         gripper = "gripper_closed"
     else:

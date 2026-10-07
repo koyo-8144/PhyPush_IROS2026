@@ -1,3 +1,5 @@
+import os
+
 M_SEEN_MAX = 2.0
 M_SEEN_MIN = 0.2
 MU_SEEN_MAX = 0.5
@@ -103,14 +105,27 @@ MULTI_ANGLE = True
 # INPUT_VARIANT = "vel_dirmanip_seq"
 # INPUT_VARIANT = "vel_osim_seq"
 # INPUT_VARIANT = "vel_eff_seq"
-# INPUT_VARIANT = "osim_only"
+INPUT_VARIANT = "osim_only"
 # INPUT_VARIANT = "osim_manip"
 # INPUT_VARIANT = "osim_dirmanip"
-INPUT_VARIANT = "eff_only"
+# INPUT_VARIANT = "eff_only"
 # INPUT_VARIANT = "eff_manip"
 # INPUT_VARIANT = "eff_dirmanip"
 
+# --- Environment override -----------------------------------------------------
+# run_variants.sh sweeps variants by setting these, so a sweep never has to
+# rewrite this file (which would race if two runs overlap). Unset -> whatever is
+# selected above. A bad value is caught by the VARIANT_TABLE check below, which
+# prints the full list of valid names.
+INPUT_VARIANT = os.environ.get("PHYPUSH_INPUT_VARIANT", INPUT_VARIANT)
+
 GRIPPER_CLOSED = True
+_gc = os.environ.get("PHYPUSH_GRIPPER_CLOSED")
+if _gc is not None:
+    if _gc.strip().lower() not in ("0", "1", "true", "false"):
+        raise ValueError(
+            f"PHYPUSH_GRIPPER_CLOSED must be 0/1/true/false, got {_gc!r}.")
+    GRIPPER_CLOSED = _gc.strip().lower() in ("1", "true")
 
 # =============================================================================
 # CHANNEL REGISTRY
@@ -212,8 +227,8 @@ elif FRAME_MODE == "local":
     if MULTI_ANGLE:
         if GRIPPER_CLOSED:
             CSV_PATH = ("/home/psxkf4/IsaacLab/source/collected_data/"
-                        "data_cube_closed_gripper_multi_angle_sb3_v2/"
-                        "data_cube_closed_gripper_multi_angle_sb3_v2.csv")
+                        "data_cube_closed_gripper_multi_angle_sb3/"
+                        "data_cube_closed_gripper_multi_angle_sb3.csv")
         else:
             CSV_PATH = ("/home/psxkf4/IsaacLab/source/collected_data/"
                                 "data_cube_opened_gripper_multi_angle_sb3/"
