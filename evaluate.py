@@ -34,69 +34,168 @@ TOP_NUM = 10
 # =============================================================================
 # TRAINED-RUN TABLE
 #
-# (gripper folder, INPUT_VARIANT) -> run timestamp.
+#   (gripper folder, INPUT_VARIANT) -> (train_from, run timestamp)
 #
-# The model-string half of the path is DERIVED, not stored: build_model_string
-# appends the variant name to the base loss string for every variant except
-# vel_only, so storing it twice is just a way to get them out of sync. Leave a
-# cell "" until that variant has been trained -- the guard below then names it
-# instead of silently pointing at a directory that does not exist.
+# train_from is PER ENTRY rather than one module-level constant. Runs made
+# before and after a collector/dataset change live under different roots
+# (results/checkpoints/from_20260916/... vs from_20261007/...), so a single
+# constant necessarily points part of the table at directories that do not
+# exist -- and because the old and new timestamps are both well-formed, that
+# failure looks like a missing config.json rather than a wrong root.
+#
+# The model-string half of the path stays DERIVED, not stored:
+# build_model_string appends the variant name to the base loss string for every
+# variant except vel_only, so storing it here too is just a way to get the two
+# out of sync.
+#
+# Use None for a variant not yet trained for that gripper. The guard below then
+# names it, and lists any matching run it can find on disk, instead of silently
+# building a path that does not exist.
 # =============================================================================
+CHECKPOINTS_ROOT = "./results/checkpoints"
 MODEL_BASE = "pinn_pcri-L1_p5c10.0_multiangle"
 
 RUN_TIMESTAMPS = {
-    ("gripper_closed", "vel_only"):          "20260917_191033",
-    ("gripper_closed", "vel_manip_cond"):    "20260917_220336",
-    ("gripper_closed", "vel_dirmanip_cond"): "20260918_000726",
-    ("gripper_closed", "vel_manip_seq"):     "20260918_004750",
-    ("gripper_closed", "vel_dirmanip_seq"):  "20260918_021512",
-    ("gripper_closed", "vel_osim_seq"):      "20260916_195532",
-    ("gripper_closed", "vel_eff_seq"):       "20260916_231604",
-    # --- velocity-free variants: fill in after training ---
-    ("gripper_closed", "osim_only"):         "",
-    ("gripper_closed", "osim_manip"):        "",
-    ("gripper_closed", "osim_dirmanip"):     "",
-    ("gripper_closed", "eff_only"):          "",
-    ("gripper_closed", "eff_manip"):         "",
-    ("gripper_closed", "eff_dirmanip"):      "",
+    # --- velocity-based: trained under from_20260916 ---
+    ("gripper_closed", "vel_only"):          ("from_20260916", "20260917_191033"),
+    ("gripper_closed", "vel_manip_cond"):    ("from_20260916", "20260917_220336"),
+    ("gripper_closed", "vel_dirmanip_cond"): ("from_20260916", "20260918_000726"),
+    ("gripper_closed", "vel_manip_seq"):     ("from_20260916", "20260918_004750"),
+    ("gripper_closed", "vel_dirmanip_seq"):  ("from_20260916", "20260918_021512"),
+    ("gripper_closed", "vel_osim_seq"):      ("from_20260916", "20260916_195532"),
+    ("gripper_closed", "vel_eff_seq"):       ("from_20260916", "20260916_231604"),
 
-    ("gripper_opened", "vel_only"):          "20260918_104227",
-    ("gripper_opened", "vel_manip_cond"):    "",
-    ("gripper_opened", "vel_dirmanip_cond"): "",
-    ("gripper_opened", "vel_manip_seq"):     "",
-    ("gripper_opened", "vel_dirmanip_seq"):  "",
-    ("gripper_opened", "vel_osim_seq"):      "20260917_144436",
-    ("gripper_opened", "vel_eff_seq"):       "20260917_153423",
-    ("gripper_opened", "osim_only"):         "",
-    ("gripper_opened", "osim_manip"):        "",
-    ("gripper_opened", "osim_dirmanip"):     "",
-    ("gripper_opened", "eff_only"):          "",
-    ("gripper_opened", "eff_manip"):         "",
-    ("gripper_opened", "eff_dirmanip"):      "",
+    # --- velocity-free: trained under from_20261007 ---
+    # Three run directories exist (20261007_045300, 20261007_053421,
+    # 20261007_061558) but which variant each one holds is not recorded here
+    # yet. Confirm before filling these in -- each run directory contains one
+    # model-string subfolder whose name ends in the variant:
+    #     ls -d results/checkpoints/from_20261007/gripper_closed/*/*/
+    # Leaving a row None is safe; evaluating it stops with the candidates it
+    # found on disk, formatted ready to paste back here.
+    ("gripper_closed", "osim_only"):         None,
+    ("gripper_closed", "osim_manip"):        None,
+    ("gripper_closed", "osim_dirmanip"):     None,
+    ("gripper_closed", "eff_only"):          ("from_20261007", "20261007_045300"),
+    ("gripper_closed", "eff_manip"):         ("from_20261007", "20261007_053421"),
+    ("gripper_closed", "eff_dirmanip"):      ("from_20261007", "20261007_061558"),
+    ("gripper_closed", "eff_only"):          ("from_20261007_v2", "20261007_112603"),
+    ("gripper_closed", "eff_manip"):         ("from_20261007_v2", "20261007_120526"),
+    ("gripper_closed", "eff_dirmanip"):      ("from_20261007_v2", "20261007_124501"),
+    
+
+
+    ("gripper_opened", "vel_only"):          ("from_20260916", "20260918_104227"),
+    ("gripper_opened", "vel_manip_cond"):    None,
+    ("gripper_opened", "vel_dirmanip_cond"): None,
+    ("gripper_opened", "vel_manip_seq"):     None,
+    ("gripper_opened", "vel_dirmanip_seq"):  None,
+    ("gripper_opened", "vel_osim_seq"):      ("from_20260916", "20260917_144436"),
+    ("gripper_opened", "vel_eff_seq"):       ("from_20260916", "20260917_153423"),
+    ("gripper_opened", "osim_only"):         None,
+    ("gripper_opened", "osim_manip"):        None,
+    ("gripper_opened", "osim_dirmanip"):     None,
+    ("gripper_opened", "eff_only"):          None,
+    ("gripper_opened", "eff_manip"):         None,
+    ("gripper_opened", "eff_dirmanip"):      None,
 }
 
-if MULTI_ANGLE:
-    gripper_folder_name = "gripper_closed" if GRIPPER_CLOSED else "gripper_opened"
-    key = (gripper_folder_name, INPUT_VARIANT)
+# MULTI_ANGLE=False predates the per-variant table. Its root was never recorded
+# separately, so check this points where that run actually lives before relying
+# on single-angle numbers.
+SINGLE_ANGLE_RUN = ("from_20260916", "20260811_063229")
+SINGLE_ANGLE_MODEL = "pinn_pcri-L1_p5c10.0"
+
+
+def _find_runs_on_disk(gripper, model_str):
+    """[(train_from, timestamp)] for every run directory holding `model_str`.
+
+    Searches across ALL train_from roots, which is the point: it answers "this
+    model was trained, so where did it go?" when the table disagrees with disk.
+    """
+    hits = []
+    for path in sorted(glob.glob(os.path.join(
+            CHECKPOINTS_ROOT, "*", gripper, "*", model_str))):
+        parts = os.path.normpath(path).split(os.sep)
+        # .../<train_from>/<gripper>/<timestamp>/<model_str>
+        hits.append((parts[-4], parts[-2]))
+    return hits
+
+
+def _resolve_run():
+    """(gripper, train_from, timestamp, model_string) for the active selection."""
+    gripper = "gripper_closed" if GRIPPER_CLOSED else "gripper_opened"
+
+    if not MULTI_ANGLE:
+        tf, ts = SINGLE_ANGLE_RUN
+        return gripper, tf, ts, SINGLE_ANGLE_MODEL
+
+    key = (gripper, INPUT_VARIANT)
     if key not in RUN_TIMESTAMPS:
         raise SystemExit(
             f"evaluate.py: no entry in RUN_TIMESTAMPS for {key}. Add one.")
-    time = RUN_TIMESTAMPS[key]
-    model = MODEL_BASE if INPUT_VARIANT == "vel_only" else f"{MODEL_BASE}_{INPUT_VARIANT}"
-else:
-    gripper_folder_name = "gripper_closed" if GRIPPER_CLOSED else "gripper_opened"
-    time = "20260811_063229"
-    model = "pinn_pcri-L1_p5c10.0"
 
-if not time or time.startswith("<"):
-    raise SystemExit(
-        f"evaluate.py: no trained run is set for INPUT_VARIANT='{INPUT_VARIANT}' "
-        f"({gripper_folder_name}). Train it, then put its run timestamp in "
-        f"RUN_TIMESTAMPS above.")
+    model_str = (MODEL_BASE if INPUT_VARIANT == "vel_only"
+                 else f"{MODEL_BASE}_{INPUT_VARIANT}")
+    entry = RUN_TIMESTAMPS[key]
 
-train_from = "from_20261007"
+    # Accept a bare timestamp string for backwards compatibility, but say so:
+    # without a train_from there is no way to know which root it belongs to.
+    if isinstance(entry, str):
+        if not entry or entry.startswith("<"):
+            entry = None
+        else:
+            raise SystemExit(
+                f"evaluate.py: RUN_TIMESTAMPS[{key}] is the bare timestamp "
+                f"'{entry}'. Entries are now (train_from, timestamp) pairs -- "
+                f"candidates on disk:\n"
+                + "\n".join(f'    ("{tf}", "{ts}")'
+                            for tf, ts in _find_runs_on_disk(gripper, model_str)))
 
-CHECKPOINT_DIR = f"./results/checkpoints/{train_from}/{gripper_folder_name}/{time}/{model}"
+    if not entry or not entry[1]:
+        lines = [f"evaluate.py: no trained run is set for "
+                 f"INPUT_VARIANT='{INPUT_VARIANT}' ({gripper})."]
+        found = _find_runs_on_disk(gripper, model_str)
+        if found:
+            lines.append("  Found on disk -- paste the right one into "
+                         "RUN_TIMESTAMPS:")
+            lines += [f'    ("{gripper}", "{INPUT_VARIANT}"): ("{tf}", "{ts}"),'
+                      for tf, ts in found]
+        else:
+            lines.append(f"  Nothing matching '{model_str}' under "
+                         f"{CHECKPOINTS_ROOT}/*/{gripper}/. Train it first.")
+        raise SystemExit("\n".join(lines))
+
+    tf, ts = entry
+    return gripper, tf, ts, model_str
+
+
+gripper_folder_name, train_from, time, model = _resolve_run()
+
+CHECKPOINT_DIR = os.path.join(CHECKPOINTS_ROOT, train_from,
+                              gripper_folder_name, time, model)
+
+# Fail here, where the cause is still legible, rather than two steps later as a
+# missing config.json. A right timestamp under the wrong train_from is the
+# likeliest mistake now that the roots are per entry, so name it explicitly.
+if not os.path.isdir(CHECKPOINT_DIR):
+    lines = [f"evaluate.py: checkpoint directory does not exist:",
+             f"  {CHECKPOINT_DIR}",
+             f"  RUN_TIMESTAMPS has ('{train_from}', '{time}') for "
+             f"'{INPUT_VARIANT}' ({gripper_folder_name})."]
+    found = _find_runs_on_disk(gripper_folder_name, model)
+    if found:
+        lines.append(f"  '{model}' IS on disk at:")
+        for tf, ts in found:
+            note = ("   <-- same timestamp, different train_from"
+                    if ts == time and tf != train_from else "")
+            lines.append(f'    ("{tf}", "{ts}"){note}')
+    else:
+        lines.append(f"  No '{model}' anywhere under "
+                     f"{CHECKPOINTS_ROOT}/*/{gripper_folder_name}/.")
+    raise SystemExit("\n".join(lines))
+
+print(f"[RUN] {INPUT_VARIANT} ({gripper_folder_name}) -> {train_from}/{time}")
 
 WEIGHTS_PATH = os.path.join(CHECKPOINT_DIR, "transformer_epoch1000.pth")
 CONFIG_PATH = os.path.join(CHECKPOINT_DIR, "config.json")
