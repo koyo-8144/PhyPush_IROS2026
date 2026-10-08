@@ -227,8 +227,8 @@ elif FRAME_MODE == "local":
     if MULTI_ANGLE:
         if GRIPPER_CLOSED:
             CSV_PATH = ("/home/psxkf4/IsaacLab/source/collected_data/"
-                        "data_cube_closed_gripper_multi_angle_sb3_v2/"
-                        "data_cube_closed_gripper_multi_angle_sb3_v2.csv")
+                        "data_cube_closed_gripper_multi_angle_sb3/"
+                        "data_cube_closed_gripper_multi_angle_sb3.csv")
         else:
             CSV_PATH = ("/home/psxkf4/IsaacLab/source/collected_data/"
                                 "data_cube_opened_gripper_multi_angle_sb3/"
