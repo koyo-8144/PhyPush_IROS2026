@@ -108,9 +108,9 @@ MULTI_ANGLE = True
 # INPUT_VARIANT = "osim_only"
 # INPUT_VARIANT = "osim_manip"
 # INPUT_VARIANT = "osim_dirmanip"
-# INPUT_VARIANT = "eff_only"
+INPUT_VARIANT = "eff_only"
 # INPUT_VARIANT = "eff_manip"
-INPUT_VARIANT = "eff_dirmanip"
+# INPUT_VARIANT = "eff_dirmanip"
 
 # --- Environment override -----------------------------------------------------
 # run_variants.sh sweeps variants by setting these, so a sweep never has to
@@ -142,8 +142,10 @@ CHANNEL_LOG = {
     VEL_PREFIX:        False,   # raw, never standardized
     "arm_manip_w":     False,   # manipulability w
     "arm_dir_manip_w": False,   # directional manipulability w_dir
-    "arm_lam_w":       True,    # mean translational diag of Lambda [kg]
-    "arm_meff_w":      True,    # effective mass along push dir [kg]
+    # "arm_lam_w":       True,    # mean translational diag of Lambda [kg]
+    # "arm_meff_w":      True,    # effective mass along push dir [kg]
+    "arm_lam_w":       False,    # mean translational diag of Lambda [kg]
+    "arm_meff_w":      False,    # effective mass along push dir [kg]
 }
 
 # Single source of truth for every variant.
@@ -227,8 +229,8 @@ elif FRAME_MODE == "local":
     if MULTI_ANGLE:
         if GRIPPER_CLOSED:
             CSV_PATH = ("/home/psxkf4/IsaacLab/source/collected_data/"
-                        "data_cube_closed_gripper_multi_angle_sb3/"
-                        "data_cube_closed_gripper_multi_angle_sb3.csv")
+                        "data_cube_closed_gripper_multi_angle_sb3_v2/"
+                        "data_cube_closed_gripper_multi_angle_sb3_v2.csv")
         else:
             CSV_PATH = ("/home/psxkf4/IsaacLab/source/collected_data/"
                                 "data_cube_opened_gripper_multi_angle_sb3/"
