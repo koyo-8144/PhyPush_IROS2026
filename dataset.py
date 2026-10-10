@@ -8,7 +8,8 @@ from sklearn.model_selection import train_test_split, GroupShuffleSplit
 from utils import clean_force_col
 from configs import (M_UNSEEN_MAX, MU_UNSEEN_MAX, FRAME_MODE, MULTI_ANGLE,
                      M_SEEN_MIN, M_SEEN_MAX, MU_SEEN_MIN, MU_SEEN_MAX,
-                     USE_ARM_STATE, CSV_PATH,
+                     USE_ARM_STATE, CSV_PATH, ARM_STATS_CSV_BASE,
+                     ARM_STATS_VERSION,
                      INPUT_VARIANT, COND_DIM, INPUT_DIM, USE_VEL,
                      VEL_PREFIX, CHANNEL_LOG,
                      VARIANT_CHANNELS, VARIANT_COND_PREFIX, VARIANT_COND_LOG,
@@ -395,7 +396,19 @@ def gather_pinn_windows(df, seq_len):
 # Velocity is NOT standardized and never appears here.
 # =============================================================================
 def arm_stats_path(csv_path=None):
-    base = csv_path if csv_path is not None else CSV_PATH
+    """Where this run's sidecar lives.
+
+    base is ARM_STATS_CSV_BASE, NOT CSV_PATH. They are the same thing unless
+    configs.ARM_STATS_VERSION is set, which v3/v4 use to keep their linear stats
+    out of the filename v1/v2's log-space stats already occupy -- see the
+    ARM-STATS SIDECAR BASE block in configs.py.
+    THE OVERRIDE LIVES HERE, not at the call sites, so load_arm_stats resolves
+    the same path save_arm_stats wrote. Putting it at the save sites would have
+    training write to the v3 name while evaluate.py read the v1 one.
+    An explicit csv_path argument still wins, for callers pointing at a
+    specific file.
+    """
+    base = csv_path if csv_path is not None else ARM_STATS_CSV_BASE
     return f"{base}.arm_stats.{INPUT_VARIANT}.npz"
 
 
@@ -405,6 +418,26 @@ def save_arm_stats(feature_cols, mean, std, csv_path=None, seq_len=None,
     kind = VARIANT_STATS_KIND if kind is None else kind
     channels = VARIANT_STATS_CHANNELS if channels is None else tuple(channels)
     logs = VARIANT_STATS_LOG if logs is None else tuple(logs)
+
+    # A redirected base points into a folder that need not exist yet (there is no
+    # ..._sb3_v3 sweep on disk -- only its sidecars live there). np.savez does not
+    # create parents, so without this the first v3 run dies on FileNotFoundError
+    # after the whole dataset has been loaded and standardized.
+    _parent = os.path.dirname(path)
+    if _parent and not os.path.isdir(_parent):
+        os.makedirs(_parent, exist_ok=True)
+        print(f"[VARIANT] created {_parent}")
+
+    # Read the outgoing file BEFORE clobbering it: one base plus one variant is
+    # one filename, so a raw run and a log run on the same base collide here.
+    _prev = None
+    if os.path.exists(path):
+        try:
+            _d = np.load(path, allow_pickle=True)
+            _prev = np.atleast_1d(_d['log_transform']).astype(bool).tolist()
+        except Exception as _e:
+            _prev = f"unreadable ({type(_e).__name__})"
+
     np.savez(path,
              feature_cols=np.array(feature_cols, dtype=object),
              mean=np.asarray(mean, dtype=np.float32),
@@ -419,7 +452,25 @@ def save_arm_stats(feature_cols, mean, std, csv_path=None, seq_len=None,
              input_dim=int(INPUT_DIM),
              cond_dim=int(COND_DIM),
              seq_len=int(seq_len) if seq_len is not None else -1)
-    print(f"[VARIANT] saved standardization stats -> {path}")
+
+    # --- what exactly went into this sidecar ---------------------------------
+    _mean = np.asarray(mean, dtype=np.float32).reshape(-1)
+    _std = np.asarray(std, dtype=np.float32).reshape(-1)
+    print(f"[VARIANT] saved standardization stats -> {os.path.abspath(path)}")
+    if ARM_STATS_VERSION:
+        print(f"[VARIANT]   base redirected by ARM_STATS_VERSION="
+              f"'{ARM_STATS_VERSION}'; data was read from {CSV_PATH}")
+    print(f"[VARIANT]   variant={INPUT_VARIANT}  kind={kind}  "
+          f"input_dim={INPUT_DIM}  cond_dim={COND_DIM}  use_vel={USE_VEL}  "
+          f"seq_len={seq_len}")
+    for _k, _c in enumerate(channels):
+        _lg = bool(logs[_k]) if _k < len(logs) else False
+        print(f"[VARIANT]   {_c}: log={_lg}  mean={_mean[_k]:.6f}  "
+              f"std={_std[_k]:.6f}   <- {'LOG SPACE' if _lg else 'raw'}")
+    if _prev is not None:
+        print(f"[VARIANT]   OVERWROTE an existing sidecar at this exact path; its "
+              f"log_transform was {_prev}, this one is {list(map(bool, logs))}. If "
+              f"another checkpoint root was using that file, it is gone.")
 
 
 def load_arm_stats(csv_path=None):
@@ -429,10 +480,16 @@ def load_arm_stats(csv_path=None):
     """
     path = arm_stats_path(csv_path)
     if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"Variant stats not found at {path}. Train once with "
-            f"INPUT_VARIANT='{INPUT_VARIANT}' so create_dataloaders writes them."
-        )
+        lines = [f"Variant stats not found at {path}.",
+                 f"  Train once with INPUT_VARIANT='{INPUT_VARIANT}' so "
+                 f"create_dataloaders writes them."]
+        if ARM_STATS_VERSION:
+            lines.append(f"  The base is redirected by ARM_STATS_VERSION="
+                         f"'{ARM_STATS_VERSION}'. If this variant was trained "
+                         f"BEFORE the redirect existed, its sidecar is still at "
+                         f"{CSV_PATH}.arm_stats.{INPUT_VARIANT}.npz -- move it, or "
+                         f"clear ARM_STATS_VERSION.")
+        raise FileNotFoundError("\n".join(lines))
     d = np.load(path, allow_pickle=True)
     cols = list(d['feature_cols'])
 

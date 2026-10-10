@@ -128,6 +128,67 @@ if _gc is not None:
     GRIPPER_CLOSED = _gc.strip().lower() in ("1", "true")
 
 # =============================================================================
+# TRAIN_FROM -- ONE KNOB FOR THE WHOLE RUN
+#
+# A checkpoint root fixes three things that MUST agree, and which used to be
+# three separate hand-edits:
+#
+#   root               reads CSV        sidecar named      arm_meff_w/arm_lam_w
+#   from_20261007      ..._sb3          ..._sb3            log
+#   from_20261007_v2   ..._sb3_v2       ..._sb3_v2         log
+#   from_20261007_v3   ..._sb3          ..._sb3_v3         raw
+#   from_20261007_v4   ..._sb3_v2       ..._sb3_v4         raw
+#
+# v3 re-trains on v1's sweep and v4 on v2's, both linear instead of log. So the
+# CSV and the sidecar stem come apart for v3/v4: writing v3's linear stats to
+# v1's filename would destroy the log-space stats v1 still needs.
+#
+# Setting TRAIN_FROM here now sets CSV_PATH, the sidecar base and CHANNEL_LOG
+# together, so they cannot drift. evaluate.py imports this same TRAIN_FROM to
+# pick the checkpoint row, which means the checkpoint and its stats are chosen
+# by one value instead of two that happen to match.
+#
+# "" leaves every one of them exactly as the plain blocks below set them.
+# =============================================================================
+TRAIN_FROM = "from_20261007_v4"
+TRAIN_FROM = os.environ.get("TRAIN_FROM", TRAIN_FROM)
+
+COLLECTED_DATA_ROOT = "/home/psxkf4/IsaacLab/source/collected_data"
+
+#   root -> (CSV stem to READ, sidecar stem to WRITE, {channel: log flag})
+# A sidecar stem equal to the CSV stem means no redirect. Roots absent from this
+# table (from_20260916, the opened-gripper runs) keep the plain behaviour below.
+ROOT_SPEC = {
+    "from_20261007":    ("data_cube_closed_gripper_multi_angle_sb3",
+                         "data_cube_closed_gripper_multi_angle_sb3",
+                         {"arm_meff_w": True,  "arm_lam_w": True}),
+    "from_20261007_v2": ("data_cube_closed_gripper_multi_angle_sb3_v2",
+                         "data_cube_closed_gripper_multi_angle_sb3_v2",
+                         {"arm_meff_w": True,  "arm_lam_w": True}),
+    "from_20261007_v3": ("data_cube_closed_gripper_multi_angle_sb3",
+                         "data_cube_closed_gripper_multi_angle_sb3_v3",
+                         {"arm_meff_w": False, "arm_lam_w": False}),
+    "from_20261007_v4": ("data_cube_closed_gripper_multi_angle_sb3_v2",
+                         "data_cube_closed_gripper_multi_angle_sb3_v4",
+                         {"arm_meff_w": False, "arm_lam_w": False}),
+}
+
+# Known but deliberately not overriding: the velocity-based runs. Listed so a
+# typo in TRAIN_FROM is an error while a legitimate root is not.
+ROOTS_NO_OVERRIDE = ("from_20260916",)
+
+if TRAIN_FROM and TRAIN_FROM not in ROOT_SPEC and TRAIN_FROM not in ROOTS_NO_OVERRIDE:
+    raise ValueError(
+        f"Unknown TRAIN_FROM {TRAIN_FROM!r}. Expected one of "
+        f"{sorted(ROOT_SPEC) + list(ROOTS_NO_OVERRIDE)}, or '' for no override.")
+
+_ROOT = ROOT_SPEC.get(TRAIN_FROM) if GRIPPER_CLOSED else None
+if TRAIN_FROM in ROOT_SPEC and not GRIPPER_CLOSED:
+    raise ValueError(
+        f"TRAIN_FROM={TRAIN_FROM!r} describes closed-gripper sweeps, but "
+        f"GRIPPER_CLOSED is False.")
+
+# =============================================================================
 # CHANNEL REGISTRY
 #
 # prefix -> is it log-transformed before standardization?
@@ -147,6 +208,17 @@ CHANNEL_LOG = {
     "arm_lam_w":       False,    # mean translational diag of Lambda [kg]
     "arm_meff_w":      False,    # effective mass along push dir [kg]
 }
+
+# TRAIN_FROM wins over the literal above. Applied HERE, before VARIANT_SEQ_LOG
+# and VARIANT_STATS_LOG are derived from it further down -- a later override
+# would leave those stale and the sidecar would record a flag the data was never
+# transformed by.
+if _ROOT is not None:
+    for _c, _lg in _ROOT[2].items():
+        if _c not in CHANNEL_LOG:
+            raise ValueError(f"ROOT_SPEC[{TRAIN_FROM!r}] names unregistered "
+                             f"channel {_c!r}.")
+        CHANNEL_LOG[_c] = bool(_lg)
 
 # Single source of truth for every variant.
 #   name -> (ordered tuple of sequence channels, cond channel or None)
@@ -237,6 +309,39 @@ elif FRAME_MODE == "local":
                                 "data_cube_opened_gripper_multi_angle_sb3.csv")
     else:
         CSV_PATH = "/home/psxkf4/IsaacLab/source/collected_data/data_cube_closed_gripper.csv"
+
+
+# =============================================================================
+# CSV_PATH / ARM_STATS_CSV_BASE -- RESOLVED FROM TRAIN_FROM
+#
+# dataset.arm_stats_path names the sidecar `<base>.arm_stats.<variant>.npz`.
+# base used to be CSV_PATH, which is right while one CSV maps to one run. v3/v4
+# break that: they re-train on v1/v2's sweeps linearly, so the CSV they READ and
+# the name their stats are WRITTEN under have to come apart. See ROOT_SPEC.
+#
+# With TRAIN_FROM set, both come from ROOT_SPEC, so the data, the sidecar and
+# CHANNEL_LOG are all decided by one value. With TRAIN_FROM empty, the blocks
+# above stand and the sidecar sits beside the CSV, exactly as before.
+# =============================================================================
+if _ROOT is not None:
+    _csv_stem, _stats_stem, _ = _ROOT
+    CSV_PATH = os.path.join(COLLECTED_DATA_ROOT, _csv_stem, f"{_csv_stem}.csv")
+    ARM_STATS_CSV_BASE = os.path.join(
+        COLLECTED_DATA_ROOT, _stats_stem, f"{_stats_stem}.csv")
+    ARM_STATS_VERSION = ("" if _stats_stem == _csv_stem
+                         else _stats_stem.rsplit("_", 1)[-1])
+    print(f"[CONFIG] TRAIN_FROM={TRAIN_FROM}")
+    print(f"[CONFIG]   read  CSV_PATH           = {CSV_PATH}")
+    print(f"[CONFIG]   write ARM_STATS_CSV_BASE = {ARM_STATS_CSV_BASE}"
+          + ("" if not ARM_STATS_VERSION else f"   (redirected)"))
+    print(f"[CONFIG]   CHANNEL_LOG arm_meff_w={CHANNEL_LOG['arm_meff_w']} "
+          f"arm_lam_w={CHANNEL_LOG['arm_lam_w']}")
+else:
+    ARM_STATS_CSV_BASE = CSV_PATH
+    ARM_STATS_VERSION = ""
+    if TRAIN_FROM:
+        print(f"[CONFIG] TRAIN_FROM={TRAIN_FROM} has no ROOT_SPEC entry; CSV_PATH, "
+              f"the sidecar base and CHANNEL_LOG are left as set above.")
 
 
 # =============================================================================

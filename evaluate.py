@@ -22,7 +22,8 @@ from utils import set_seed, clean_force_col
 from configs import (M_SEEN_MAX, M_SEEN_MIN, MU_SEEN_MAX, MU_SEEN_MIN,
                      M_UNSEEN_MAX, MU_UNSEEN_MAX, GLOBAL_M_RANGE, GLOBAL_MU_RANGE,
                      GLOBAL_FRIC_RANGE, REAL_M_RANGE, REAL_MU_RANGE, REAL_FRIC_RANGE,
-                     INCLUDE_UNSEEN, CSV_PATH, G, MULTI_ANGLE, GRIPPER_CLOSED)
+                     INCLUDE_UNSEEN, CSV_PATH, G, MULTI_ANGLE, GRIPPER_CLOSED,
+                     ARM_STATS_CSV_BASE, ARM_STATS_VERSION, TRAIN_FROM)
 
 # ==========================================
 # 1. CONFIGURATION & PATHS
@@ -52,6 +53,30 @@ TOP_NUM = 10
 # names it, and lists any matching run it can find on disk, instead of silently
 # building a path that does not exist.
 # =============================================================================
+# ONE VARIANT NAME, SEVERAL ROOTS.
+#
+# eff_only / eff_manip / eff_dirmanip were each retrained on four collections,
+# so RUN_TIMESTAMPS below writes 35 rows that collapse to 26 dict keys: a dict
+# keeps only the LAST row written for a repeated key, which means
+# ('gripper_closed', 'eff_only') resolves to from_20261007_v4 and the v1, v2 and
+# v3 checkpoints are unreachable. Silently -- a wrong checkpoint still loads and
+# still produces a full summary CSV.
+#
+# The rows are therefore recovered from this file's own source and the root is
+# chosen by TRAIN_FROM:
+#
+#     TRAIN_FROM=from_20261007_v3 PHYPUSH_INPUT_VARIANT=eff_only \
+#     ARM_STATS_VERSION=v3 python evaluate.py
+#
+# With several rows available and TRAIN_FROM unset, evaluation STOPS and lists
+# them rather than picking one.
+#
+# TRAIN_FROM is IMPORTED FROM configs, not defined here. It also decides
+# CSV_PATH, the sidecar base and CHANNEL_LOG (see ROOT_SPEC in configs.py), and
+# configs is imported before this line would ever run -- so a TRAIN_FROM set
+# here could pick a checkpoint while the data and stats came from somewhere
+# else. Set it in configs.py, or in the environment, which both see.
+
 CHECKPOINTS_ROOT = "./results/checkpoints"
 MODEL_BASE = "pinn_pcri-L1_p5c10.0_multiangle"
 
@@ -82,8 +107,12 @@ RUN_TIMESTAMPS = {
     ("gripper_closed", "eff_only"):          ("from_20261007_v2", "20261007_112603"),
     ("gripper_closed", "eff_manip"):         ("from_20261007_v2", "20261007_120526"),
     ("gripper_closed", "eff_dirmanip"):      ("from_20261007_v2", "20261007_124501"),
-    
-
+    ("gripper_closed", "eff_only"):          ("from_20261007_v3", "20261008_162059"),
+    ("gripper_closed", "eff_manip"):         ("from_20261007_v3", "20261008_170301"),
+    ("gripper_closed", "eff_dirmanip"):      ("from_20261007_v3", "20261008_174506"),
+    ("gripper_closed", "eff_only"):          ("from_20261007_v4", "20261008_183528"),
+    ("gripper_closed", "eff_manip"):         ("from_20261007_v4", "20261008_191412"),
+    ("gripper_closed", "eff_dirmanip"):      ("from_20261007_v4", "20261008_195337"),
 
     ("gripper_opened", "vel_only"):          ("from_20260916", "20260918_104227"),
     ("gripper_opened", "vel_manip_cond"):    None,
@@ -105,6 +134,96 @@ RUN_TIMESTAMPS = {
 # on single-angle numbers.
 SINGLE_ANGLE_RUN = ("from_20260916", "20260811_063229")
 SINGLE_ANGLE_MODEL = "pinn_pcri-L1_p5c10.0"
+
+
+def _run_rows():
+    """{(gripper, variant): [(train_from, timestamp), ...]} for EVERY source row.
+
+    Parsed from this file, because the RUN_TIMESTAMPS dict object has already
+    dropped the shadowed rows. Degrades to the dict's own last-wins view if the
+    source cannot be read, which is exactly the old behaviour.
+    """
+    try:
+        import ast
+        with open(os.path.abspath(__file__), "r") as f:
+            tree = ast.parse(f.read())
+    except Exception as exc:
+        print(f"[RUN][WARNING] could not parse {__file__} to recover shadowed "
+              f"RUN_TIMESTAMPS rows ({type(exc).__name__}: {exc}); only the last "
+              f"row of each repeated key is visible.")
+        return {k: [v] for k, v in RUN_TIMESTAMPS.items() if v}
+
+    node = None
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Assign) and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)
+                and n.targets[0].id == "RUN_TIMESTAMPS"
+                and isinstance(n.value, ast.Dict)):
+            node = n.value
+            break
+    if node is None:
+        return {k: [v] for k, v in RUN_TIMESTAMPS.items() if v}
+
+    rows = {}
+    for k_node, v_node in zip(node.keys, node.values):
+        try:
+            key, val = ast.literal_eval(k_node), ast.literal_eval(v_node)
+        except Exception:
+            continue
+        if isinstance(val, (tuple, list)) and len(val) == 2 and val[1]:
+            rows.setdefault(key, []).append((val[0], val[1]))
+
+    dropped = {k: [tf for tf, _ in v] for k, v in rows.items() if len(v) > 1}
+    if dropped:
+        print("[RUN] RUN_TIMESTAMPS has repeated keys; the dict keeps only the "
+              "last row of each. Recovered from source:")
+        for (g, v), tfs in dropped.items():
+            print(f"[RUN]   {g}/{v}: {len(tfs)} rows -> " + ", ".join(tfs)
+                  + f"   (dict alone would use '{tfs[-1]}')")
+        print("[RUN] Set TRAIN_FROM=<root> to choose.")
+    return rows
+
+
+RUN_ROWS = _run_rows()
+
+
+def _select_row(gripper, variant, model_str):
+    """The one (train_from, timestamp) to evaluate. Refuses to guess."""
+    cands = RUN_ROWS.get((gripper, variant), [])
+    if not cands:
+        return None
+
+    if TRAIN_FROM:
+        hit = [c for c in cands if c[0] == TRAIN_FROM]
+        if not hit:
+            lines = [f"evaluate.py: TRAIN_FROM='{TRAIN_FROM}' but RUN_TIMESTAMPS has "
+                     f"no '{variant}' row under that root. It is defined for: "
+                     + ", ".join(repr(tf) for tf, _ in cands)]
+            if len(cands) == 1:
+                lines.append(f"  It has exactly one row, so `env -u TRAIN_FROM` (or "
+                             f"TRAIN_FROM={cands[0][0]}) evaluates it. Not done "
+                             f"automatically: a TRAIN_FROM that gets ignored is how "
+                             f"one collection's numbers end up filed under "
+                             f"another's name.")
+            raise SystemExit("\n".join(lines))
+        if len(hit) > 1:
+            raise SystemExit(
+                f"evaluate.py: {len(hit)} '{variant}' rows under '{TRAIN_FROM}'. "
+                f"Remove one.")
+        return hit[0]
+
+    if len(cands) > 1:
+        lines = [f"evaluate.py: '{variant}' ({gripper}) has {len(cands)} rows in "
+                 f"RUN_TIMESTAMPS, under different collection roots. Set TRAIN_FROM:"]
+        for tf, ts in cands:
+            lines.append(f"    TRAIN_FROM={tf} PHYPUSH_INPUT_VARIANT={variant}"
+                         f"     (run {ts})")
+        lines.append(f"  Unset, Python's dict would silently use the LAST row "
+                     f"('{cands[-1][0]}'), which is why this stops instead.")
+        lines.append(f"  Remember ARM_STATS_VERSION must match: v3/v4 are the "
+                     f"linear runs, v1/v2 the log-space ones.")
+        raise SystemExit("\n".join(lines))
+    return cands[0]
 
 
 def _find_runs_on_disk(gripper, model_str):
@@ -137,7 +256,12 @@ def _resolve_run():
 
     model_str = (MODEL_BASE if INPUT_VARIANT == "vel_only"
                  else f"{MODEL_BASE}_{INPUT_VARIANT}")
-    entry = RUN_TIMESTAMPS[key]
+
+    # Source-recovered, TRAIN_FROM-selected. Falls back to the dict for a key
+    # whose rows could not be parsed, so nothing regresses.
+    entry = _select_row(gripper, INPUT_VARIANT, model_str)
+    if entry is None:
+        entry = RUN_TIMESTAMPS[key]
 
     # Accept a bare timestamp string for backwards compatibility, but say so:
     # without a train_from there is no way to know which root it belongs to.
@@ -195,7 +319,23 @@ if not os.path.isdir(CHECKPOINT_DIR):
                      f"{CHECKPOINTS_ROOT}/*/{gripper_folder_name}/.")
     raise SystemExit("\n".join(lines))
 
-print(f"[RUN] {INPUT_VARIANT} ({gripper_folder_name}) -> {train_from}/{time}")
+print(f"[RUN] {INPUT_VARIANT} ({gripper_folder_name}) -> {train_from}/{time}"
+      + (f"   (TRAIN_FROM={TRAIN_FROM})" if TRAIN_FROM else ""))
+print(f"[RUN] data   CSV_PATH            = {CSV_PATH}")
+print(f"[RUN] stats  ARM_STATS_CSV_BASE  = {ARM_STATS_CSV_BASE}"
+      + (f"   (ARM_STATS_VERSION='{ARM_STATS_VERSION}')" if ARM_STATS_VERSION
+         else "   (= CSV_PATH)"))
+
+# The checkpoint row and the data/stats paths now come from the same TRAIN_FROM,
+# so they cannot disagree -- unless the row chosen here is for a root other than
+# the one configs resolved, which happens when RUN_TIMESTAMPS and ROOT_SPEC
+# disagree about which roots exist. That is worth naming: it is the one way back
+# into a v3 checkpoint reading v1's stats, and v3-vs-v4 is both-raw, so the
+# sidecar's own log_transform check would NOT catch it.
+if TRAIN_FROM and train_from != TRAIN_FROM:
+    print(f"[RUN][WARNING] evaluating checkpoint root '{train_from}' while configs "
+          f"resolved paths for TRAIN_FROM='{TRAIN_FROM}'. CSV_PATH and the stats "
+          f"base above belong to '{TRAIN_FROM}', not to this checkpoint.")
 
 WEIGHTS_PATH = os.path.join(CHECKPOINT_DIR, "transformer_epoch1000.pth")
 CONFIG_PATH = os.path.join(CHECKPOINT_DIR, "config.json")
