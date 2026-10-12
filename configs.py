@@ -108,9 +108,9 @@ MULTI_ANGLE = True
 # INPUT_VARIANT = "osim_only"
 # INPUT_VARIANT = "osim_manip"
 # INPUT_VARIANT = "osim_dirmanip"
-INPUT_VARIANT = "eff_only"
+# INPUT_VARIANT = "eff_only"
 # INPUT_VARIANT = "eff_manip"
-# INPUT_VARIANT = "eff_dirmanip"
+INPUT_VARIANT = "eff_dirmanip"
 
 # --- Environment override -----------------------------------------------------
 # run_variants.sh sweeps variants by setting these, so a sweep never has to
