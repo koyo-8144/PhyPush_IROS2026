@@ -105,12 +105,12 @@ MULTI_ANGLE = True
 # INPUT_VARIANT = "vel_dirmanip_seq"
 # INPUT_VARIANT = "vel_osim_seq"
 # INPUT_VARIANT = "vel_eff_seq"
-# INPUT_VARIANT = "osim_only"
+INPUT_VARIANT = "osim_only"
 # INPUT_VARIANT = "osim_manip"
 # INPUT_VARIANT = "osim_dirmanip"
 # INPUT_VARIANT = "eff_only"
 # INPUT_VARIANT = "eff_manip"
-INPUT_VARIANT = "eff_dirmanip"
+# INPUT_VARIANT = "eff_dirmanip"
 
 # --- Environment override -----------------------------------------------------
 # run_variants.sh sweeps variants by setting these, so a sweep never has to
@@ -150,7 +150,7 @@ if _gc is not None:
 #
 # "" leaves every one of them exactly as the plain blocks below set them.
 # =============================================================================
-TRAIN_FROM = "from_20261007_v4"
+TRAIN_FROM = "from_20261007_v3"
 TRAIN_FROM = os.environ.get("TRAIN_FROM", TRAIN_FROM)
 
 COLLECTED_DATA_ROOT = "/home/psxkf4/IsaacLab/source/collected_data"
@@ -301,8 +301,8 @@ elif FRAME_MODE == "local":
     if MULTI_ANGLE:
         if GRIPPER_CLOSED:
             CSV_PATH = ("/home/psxkf4/IsaacLab/source/collected_data/"
-                        "data_cube_closed_gripper_multi_angle_sb3_v2/"
-                        "data_cube_closed_gripper_multi_angle_sb3_v2.csv")
+                        "data_cube_closed_gripper_multi_angle_sb3/"
+                        "data_cube_closed_gripper_multi_angle_sb3.csv")
         else:
             CSV_PATH = ("/home/psxkf4/IsaacLab/source/collected_data/"
                                 "data_cube_opened_gripper_multi_angle_sb3/"
