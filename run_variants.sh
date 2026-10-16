@@ -189,6 +189,7 @@ for v in "${VARIANTS[@]}"; do
         OK+=("$v")
         continue
     fi
+    
 
     start=$SECONDS
     # PIPESTATUS, not $?, because $? would be tee's exit code.
