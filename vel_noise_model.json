@@ -1,0 +1,27 @@
+{
+  "fs": 100.0,
+  "band_hz": [
+    25.0,
+    50.0
+  ],
+  "window": "hann",
+  "detrend": "linear",
+  "n_real": 270,
+  "seq_len": 60,
+  "bins_in_band": 15,
+  "freq_resolution_hz": 1.6666666666666667,
+  "sigma_real": 0.0015162412757597974,
+  "sigma_sim": 0.0004917681097779151,
+  "sigma_inject": 0.0014342774252295665,
+  "floor_psd_real": 4.597975212635396e-08,
+  "floor_slope": 0.2531566155698309,
+  "floor_slope_white_null": [
+    -0.18910796449353076,
+    0.22436180166214081
+  ],
+  "floor_verdict": "rising",
+  "paper_literal": 0.011269111908374423,
+  "paper_literal_factor": 6.0553007081949835,
+  "real_source": "real_channels.csv  (270 push(es) x 60 steps)",
+  "sim_source": "sim_channels.csv  (242360 push(es) x 60 steps)"
+}

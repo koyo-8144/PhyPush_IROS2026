@@ -98,9 +98,12 @@ RUN_TIMESTAMPS = {
     #     ls -d results/checkpoints/from_20261007/gripper_closed/*/*/
     # Leaving a row None is safe; evaluating it stops with the candidates it
     # found on disk, formatted ready to paste back here.
-    ("gripper_closed", "osim_only"):         None,
-    ("gripper_closed", "osim_manip"):        None,
-    ("gripper_closed", "osim_dirmanip"):     None,
+    ("gripper_closed", "osim_only"):         ("from_20261007_v3", "20261013_024155"),
+    ("gripper_closed", "osim_manip"):        ("from_20261007_v3", "20261013_031723"),
+    ("gripper_closed", "osim_dirmanip"):     ("from_20261007_v3", "20261013_035238"),
+    ("gripper_closed", "osim_only"):         ("from_20261007_v4", "20261013_102417"),
+    ("gripper_closed", "osim_manip"):        ("from_20261007_v4", "20261013_105749"),
+    ("gripper_closed", "osim_dirmanip"):     ("from_20261007_v4", "20261013_113121"),
     ("gripper_closed", "eff_only"):          ("from_20261007", "20261007_045300"),
     ("gripper_closed", "eff_manip"):         ("from_20261007", "20261007_053421"),
     ("gripper_closed", "eff_dirmanip"):      ("from_20261007", "20261007_061558"),
