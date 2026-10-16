@@ -1,4 +1,5 @@
 import os
+import re
 import glob
 import json
 import csv
@@ -89,6 +90,24 @@ RUN_TIMESTAMPS = {
     ("gripper_closed", "vel_dirmanip_seq"):  ("from_20260916", "20260918_021512"),
     ("gripper_closed", "vel_osim_seq"):      ("from_20260916", "20260916_195532"),
     ("gripper_closed", "vel_eff_seq"):       ("from_20260916", "20260916_231604"),
+
+    # --- velocity-based + fitted EE observation noise: from_20261016 ---
+    # Same seven variants, same sweep (..._sb3), retrained with
+    # sigma_inject = 0.001434 m/s injected on the velocity input. These rows
+    # SHADOW the from_20260916 rows above under Python's dict rules, which is
+    # exactly what _run_rows() recovers from source: both roots stay reachable
+    # and TRAIN_FROM picks between them.
+    #     TRAIN_FROM=from_20260916 ...   the clean baseline
+    #     TRAIN_FROM=from_20261016 ...   the noised run
+    # With TRAIN_FROM unset, _select_row stops and lists both rather than
+    # silently taking the last one.
+    ("gripper_closed", "vel_only"):          ("from_20261016", "20261016_144421"),
+    ("gripper_closed", "vel_manip_cond"):    ("from_20261016", "20261016_151914"),
+    ("gripper_closed", "vel_dirmanip_cond"): ("from_20261016", "20261016_155537"),
+    ("gripper_closed", "vel_manip_seq"):     ("from_20261016", "20261016_163158"),
+    ("gripper_closed", "vel_dirmanip_seq"):  ("from_20261016", "20261016_170724"),
+    ("gripper_closed", "vel_osim_seq"):      ("from_20261016", "20261016_174246"),
+    ("gripper_closed", "vel_eff_seq"):       ("from_20261016", "20261016_181807"),
 
     # --- velocity-free: trained under from_20261007 ---
     # Three run directories exist (20261007_045300, 20261007_053421,
@@ -229,19 +248,90 @@ def _select_row(gripper, variant, model_str):
     return cands[0]
 
 
+# build_model_string appends a run-tagging token AFTER the variant for anything
+# the base string does not already describe. Today that is the injected velocity
+# noise, '_vn<micro-m/s>u'. evaluate.py cannot derive it -- the sigma lives in
+# the checkpoint's own config.json, which is inside the directory being looked
+# for -- so the model directory is DISCOVERED on disk instead of assembled, and
+# this pattern exists only to recognise such a token when matching across roots.
+MODEL_TAG_RE = re.compile(r"^(?P<base>.*?)(?P<tag>_vn\d+u)?$")
+
+
+def _model_dir_matches(name, expected):
+    """Is `name` the directory for `expected`, with or without a run tag?
+
+    An exact prefix test will not do: MODEL_BASE is a prefix of every other
+    variant's directory name, so 'vel_only' would match 'vel_manip_seq'.
+    """
+    if name == expected:
+        return True
+    m = MODEL_TAG_RE.match(name)
+    return bool(m and m.group("tag") and m.group("base") == expected)
+
+
 def _find_runs_on_disk(gripper, model_str):
     """[(train_from, timestamp)] for every run directory holding `model_str`.
 
     Searches across ALL train_from roots, which is the point: it answers "this
     model was trained, so where did it go?" when the table disagrees with disk.
+    Tagged directories count, so a noised run is still findable from the plain
+    variant name.
     """
     hits = []
     for path in sorted(glob.glob(os.path.join(
-            CHECKPOINTS_ROOT, "*", gripper, "*", model_str))):
+            CHECKPOINTS_ROOT, "*", gripper, "*", "*"))):
+        if not os.path.isdir(path):
+            continue
         parts = os.path.normpath(path).split(os.sep)
-        # .../<train_from>/<gripper>/<timestamp>/<model_str>
-        hits.append((parts[-4], parts[-2]))
-    return hits
+        # .../<train_from>/<gripper>/<timestamp>/<model_dir>
+        if _model_dir_matches(parts[-1], model_str):
+            hits.append((parts[-4], parts[-2]))
+    return sorted(set(hits))
+
+
+def _resolve_model_dir(train_from, gripper, ts, expected):
+    """The model-string directory actually sitting in that run directory.
+
+    A run directory holds exactly one model-string folder, so the timestamp
+    already identifies the run uniquely and the folder's name can be read
+    rather than reconstructed. Reconstructing it is what broke when
+    build_model_string started appending the noise tag: the derived name was
+    correct for every run trained before the tag existed and wrong for every
+    one after, with the failure surfacing as a missing directory.
+
+    Falls back to `expected` when the run directory is absent or ambiguous, so
+    the existing (and more informative) error below still does the reporting.
+    """
+    run_dir = os.path.join(CHECKPOINTS_ROOT, train_from, gripper, ts)
+    if not os.path.isdir(run_dir):
+        return expected
+    subs = sorted(d for d in os.listdir(run_dir)
+                  if os.path.isdir(os.path.join(run_dir, d)))
+    if not subs:
+        return expected
+
+    exact = [d for d in subs if d == expected]
+    tagged = [d for d in subs if d != expected and _model_dir_matches(d, expected)]
+    if exact:
+        return exact[0]
+    if len(tagged) == 1:
+        print(f"[RUN] model dir carries a run tag: {tagged[0]}")
+        return tagged[0]
+    if len(tagged) > 1:
+        raise SystemExit(
+            f"evaluate.py: {len(tagged)} tagged model directories in {run_dir}:\n"
+            + "\n".join(f"    {d}" for d in tagged)
+            + "\n  A run directory should hold exactly one. Remove or move the "
+              "ones that do not belong to this run.")
+
+    # Something is there, but it is not this variant. Say so here rather than
+    # reporting a missing directory two steps later.
+    if len(subs) == 1:
+        print(f"[RUN][WARNING] {run_dir} holds '{subs[0]}', which does not match "
+              f"the expected '{expected}'.")
+        print(f"[RUN][WARNING] The RUN_TIMESTAMPS row for this variant probably "
+              f"points at another variant's run. Not using it.")
+    return expected
 
 
 def _resolve_run():
@@ -294,6 +384,8 @@ def _resolve_run():
         raise SystemExit("\n".join(lines))
 
     tf, ts = entry
+    # Read the model directory off disk instead of trusting the derived name.
+    model_str = _resolve_model_dir(tf, gripper, ts, model_str)
     return gripper, tf, ts, model_str
 
 

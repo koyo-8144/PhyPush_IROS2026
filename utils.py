@@ -84,4 +84,12 @@ def build_model_string(config):
     if variant != 'vel_only':
         parts.append(variant)
 
+    # Tag the injected observation noise, in micro-m/s. Without this a noised
+    # run and a clean run of the same variant land in the same directory name
+    # and are told apart only by the timestamp -- which is exactly the kind of
+    # thing nobody can reconstruct six weeks later.
+    sigma = float(config.get('vel_noise_sigma', 0.0) or 0.0)
+    if sigma > 0:
+        parts.append(f"vn{sigma * 1e6:.0f}u")
+
     return "_".join(parts)

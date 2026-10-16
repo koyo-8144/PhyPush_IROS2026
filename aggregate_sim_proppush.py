@@ -21,7 +21,13 @@ BASE_RUN_DIR_1 = f"/home/psxkf4/PhyPush/results/checkpoints/{train_from_1}/{grip
 BASE_RUN_DIR_2 = f"/home/psxkf4/PhyPush/results/checkpoints/{train_from_2}/{gripper_folder_name}"
 BASE_RUN_DIR_3 = f"/home/psxkf4/PhyPush/results/checkpoints/{train_from_3}/{gripper_folder_name}"
 
+train_from_4 = "from_20261016"          # EE vel family + fitted observation noise
+BASE_RUN_DIR_4 = f"/home/psxkf4/PhyPush/results/checkpoints/{train_from_4}/{gripper_folder_name}"
 
+# build_model_string appends this after the variant (and directly after
+# "multiangle" for vel_only, which carries no variant token). One name, so a
+# refit that changes sigma is a one-line edit here.
+vn = "_vn1434u"
 
 csv_file = "domain_evaluation_summary.csv"
 MODELS_TO_COMPARE = {
@@ -99,6 +105,47 @@ MODELS_TO_COMPARE = {
                 "draw_thick_line": "No",
     },
 
+    # ------------------------- PhyPush + EE vel observation noise -------------------------
+    # Same seven variants, same sweep (..._sb3), retrained with
+    # sigma_inject = 0.001434 m/s injected on the velocity input at training time.
+    # Paired with the clean entries above: whichever clean variant is active here
+    # has its noised counterpart active too, so every added line has something to
+    # be compared against.
+    r"PhyPush EE vel seq input only + obs noise": {
+            "path": os.path.join(BASE_RUN_DIR_4, "20261016_144421", f"pinn_pcri-L1_p5c10.0_multiangle{vn}/{csv_file}"),
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    # r"PhyPush EE vel + worst manip cond + obs noise": {
+    #         "path": os.path.join(BASE_RUN_DIR_4, "20261016_151914", f"pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond{vn}/{csv_file}"),
+    #         "force_input": "No",
+    #         "draw_thick_line": "No",
+    # },
+    # r"PhyPush EE vel + worst dir manip cond + obs noise": {
+    #         "path": os.path.join(BASE_RUN_DIR_4, "20261016_155537", f"pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_cond{vn}/{csv_file}"),
+    #         "force_input": "No",
+    #         "draw_thick_line": "No",
+    # },
+    r"PhyPush EE vel + manip seq input + obs noise": {
+            "path": os.path.join(BASE_RUN_DIR_4, "20261016_163158", f"pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq{vn}/{csv_file}"),
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    r"PhyPush EE vel + dir manip seq input + obs noise": {
+            "path": os.path.join(BASE_RUN_DIR_4, "20261016_170724", f"pinn_pcri-L1_p5c10.0_multiangle_vel_dirmanip_seq{vn}/{csv_file}"),
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    r"PhyPush EE vel + osim seq input + obs noise": {
+            "path": os.path.join(BASE_RUN_DIR_4, "20261016_174246", f"pinn_pcri-L1_p5c10.0_multiangle_vel_osim_seq{vn}/{csv_file}"),
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    r"PhyPush EE vel + eff mass seq input + obs noise": {
+            "path": os.path.join(BASE_RUN_DIR_4, "20261016_181807", f"pinn_pcri-L1_p5c10.0_multiangle_vel_eff_seq{vn}/{csv_file}"),
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
 
     # # ---------------------------------- PropPush ----------------------------------
     # r"PropPush EE vel seq input only": {
@@ -137,6 +184,7 @@ MODELS_TO_COMPARE = {
     #         "draw_thick_line": "No",
     # },
 }
+
 
 # --- METRICS DEFINITIONS ---
 METRICS_NRMSE = {

@@ -15,7 +15,9 @@ from models import PhysicsTransformerEstimator
 from losses import log_mse_loss, PinnLossCalculator
 from dataset import create_dataloaders, load_dataset_csv
 from configs import (used_config, CSV_PATH, INPUT_VARIANT, COND_DIM, INPUT_DIM,
-                     USE_VEL, N_SEQ_EXTRA, GRIPPER_CLOSED)
+                     USE_VEL, N_SEQ_EXTRA, GRIPPER_CLOSED, TRAIN_FROM,
+                     VEL_NOISE, VEL_NOISE_JSON, VEL_NOISE_IN_VAL)
+from vel_noise import VelNoise
 
 
 def main():
@@ -96,16 +98,67 @@ def main():
     use_cond = cond_dimension > 0
     use_seq_channel = n_seq_extra > 0
 
-    def build_input(b_vel, b_extra):
+    # ==========================================
+    # EE VELOCITY OBSERVATION NOISE
+    #
+    # Resolved here, before build_model_string and before config.json is
+    # written, so the checkpoint directory name and the saved config both carry
+    # the sigma the run actually used.
+    # ==========================================
+    if VEL_NOISE.strip().lower() in ("off", "0", "false", ""):
+        vel_noise = VelNoise.disabled()
+    elif VEL_NOISE.strip().lower() in ("on", "1", "true"):
+        vel_noise = VelNoise.from_json(VEL_NOISE_JSON)
+    else:
+        vel_noise = VelNoise(float(VEL_NOISE), source=f"VEL_NOISE={VEL_NOISE}")
+    config['vel_noise_sigma'] = vel_noise.sigma if vel_noise.enabled else 0.0
+    print(vel_noise.describe())
+    if vel_noise.enabled and not use_vel:
+        # A velocity-free variant never feeds velocity to the encoder, so there
+        # is nothing for the noise to act on. Saying so is the whole point: a
+        # silent no-op would produce a run NAMED as noised, compared against a
+        # clean run, and identical to it -- a null result that looks like
+        # evidence that the noise does not matter.
+        print(f"[vel_noise] WARNING: variant '{input_variant}' does not feed "
+              f"velocity to the model (use_vel=False), so this injection is a "
+              f"NO-OP.")
+        print(f"[vel_noise]          The run will be identical to a clean one. "
+              f"Use a vel_* variant, or set VEL_NOISE=off.")
+        vel_noise = VelNoise.disabled()
+        config['vel_noise_sigma'] = 0.0
+    elif vel_noise.enabled:
+        print(f"[vel_noise] applied to the MODEL INPUT only; the PINN sliding "
+              f"mask keeps the clean velocity (see below).")
+        print(f"[vel_noise] validation is "
+              f"{'ALSO noised' if VEL_NOISE_IN_VAL else 'left CLEAN'} "
+              f"(configs.VEL_NOISE_IN_VAL)")
+
+    def build_input(b_vel, b_extra, training=True):
         """Assemble the encoder input in configs.VARIANT_CHANNELS order.
 
         Velocity is channel 0 when present (raw, unstandardized); the extra
         window channels follow in table order (standardized in dataset.py).
+
+        The observation noise is added HERE and nowhere else, which is what
+        keeps it off the physics. `b_vel` is used twice downstream: as the
+        model's velocity channel, and as the source of the PINN sliding mask
+        (|v| > vel_filter_threshold). The mask is SUPERVISION, not an
+        observation -- the real robot never computes it, and the model never
+        sees it -- so noising it would corrupt which timesteps the friction
+        residual is evaluated on, in exchange for modelling nothing. apply()
+        returns a new tensor rather than writing in place, so `b_vel` reaches
+        the mask untouched.
+
+        Velocity is fed raw in this pipeline, so sigma goes in directly in m/s;
+        no `std=` conversion is needed or wanted here.
         """
+        v = b_vel
+        if use_vel and vel_noise.enabled and (training or VEL_NOISE_IN_VAL):
+            v = vel_noise.apply(v)
         if use_vel and b_extra is not None:
-            return torch.cat([b_vel, b_extra], dim=-1)
+            return torch.cat([v, b_extra], dim=-1)
         if use_vel:
-            return b_vel
+            return v
         return b_extra
 
     print(f"[VARIANT] {input_variant}: input_dim={input_dimension}, "
@@ -156,7 +209,13 @@ def main():
     # ==========================================
     # 2. PATHS & SAVING CONFIG
     # ==========================================
-    train_from = "from_20261007_v4"
+    # The checkpoint folder must be the root the run actually READ, which is
+    # configs.TRAIN_FROM -- env-overridable, and what evaluate.py imports to
+    # find these checkpoints again. Hardcoding it here meant that a run started
+    # with TRAIN_FROM=from_20260916 read the velocity sweep and then filed its
+    # checkpoint under from_20261007_v4, where nothing would ever look for it.
+    # Identical behaviour when TRAIN_FROM is left at its default.
+    train_from = TRAIN_FROM
     if GRIPPER_CLOSED:
         gripper = "gripper_closed"
     else:
@@ -537,7 +596,7 @@ def main():
 
                 b_cond = batch[9].to(device) if use_cond else None
                 b_seq = batch[9].to(device) if use_seq_channel else None
-                b_input = build_input(b_vel, b_seq)
+                b_input = build_input(b_vel, b_seq, training=False)
 
                 # =======================================================
                 # LOCAL FRAME ALIGNMENT FIX

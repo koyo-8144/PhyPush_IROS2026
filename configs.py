@@ -138,6 +138,7 @@ if _gc is not None:
 #   from_20261007_v2   ..._sb3_v2       ..._sb3_v2         log
 #   from_20261007_v3   ..._sb3          ..._sb3_v3         raw
 #   from_20261007_v4   ..._sb3_v2       ..._sb3_v4         raw
+#   from_20261016      ..._sb3          ..._sb3_n1         raw    <- EE vel + noise
 #
 # v3 re-trains on v1's sweep and v4 on v2's, both linear instead of log. So the
 # CSV and the sidecar stem come apart for v3/v4: writing v3's linear stats to
@@ -171,6 +172,24 @@ ROOT_SPEC = {
     "from_20261007_v4": ("data_cube_closed_gripper_multi_angle_sb3_v2",
                          "data_cube_closed_gripper_multi_angle_sb3_v4",
                          {"arm_meff_w": False, "arm_lam_w": False}),
+    # The EE-velocity family retrained with the fitted observation noise.
+    #
+    # Reads ..._sb3 -- the SAME sweep the existing velocity runs
+    # (from_20260916) read, because a noised run is only interpretable against
+    # a clean run on identical data.
+    #
+    # Writes its sidecars under a stem of its OWN (..._sb3_n1) rather than
+    # beside that CSV. The stats themselves would be identical either way --
+    # the noise is injected on the model input in train.py, never in
+    # dataset.py, so save_arm_stats sees exactly the same arm channels and
+    # the same train split -- but writing to ..._sb3 would CLOBBER the
+    # sidecars the from_20260916 checkpoints still load at eval time, and
+    # if their log_transform flags ever differed from these, load_arm_stats
+    # would start refusing those older models. A separate stem costs one
+    # directory and removes the whole question.
+    "from_20261016":    ("data_cube_closed_gripper_multi_angle_sb3",
+                         "data_cube_closed_gripper_multi_angle_sb3_n1",
+                         {"arm_meff_w": True, "arm_lam_w": True}),
 }
 
 # Known but deliberately not overriding: the velocity-based runs. Listed so a
@@ -363,6 +382,41 @@ MAX_PUSH_LATERAL_OFFSET = 0.005
 MAX_PUSH_COM_OFFSET = 0.05          # loose: drops physics blowups only
 
 
+# =============================================================================
+# EE VELOCITY OBSERVATION NOISE  (sim-to-real)
+#
+# The real Franka's velocity channel carries a white noise floor that simulation
+# does not reproduce: fit_vel_noise_model.py measured sigma_real 0.001516 m/s
+# against sigma_sim 0.000492, and writes sigma_inject to vel_noise_model.json.
+# Training on clean simulation never asks the model to read a velocity trace
+# through that floor.
+#
+#   VEL_NOISE = "off"    no injection (the runs you already have)
+#               "on"     sigma_inject from VEL_NOISE_JSON
+#               "0.0015" that sigma, in m/s, by hand
+#
+# Velocity is fed RAW and unstandardized in this codebase (see the CHANNEL
+# REGISTRY above and dataset.create_dataloaders), so sigma goes in directly in
+# m/s with no z-space conversion. That is a property of THIS pipeline, not a
+# general fact -- a pipeline that standardized velocity would need sigma/std.
+#
+# Only the vel_* variants are affected. The velocity-free variants (osim_*,
+# eff_*) do not feed velocity to the model at all, so injection is a no-op for
+# them and train.py says so rather than pretending otherwise.
+# =============================================================================
+VEL_NOISE = os.environ.get("VEL_NOISE", "off")
+VEL_NOISE_JSON = os.environ.get("VEL_NOISE_JSON", "vel_noise_model.json")
+
+# Whether the VALIDATION pass is noised too.
+#
+# True by design. best_model.pth is chosen by validation loss, and the model is
+# being selected to run on a real robot whose velocity carries this noise. A
+# clean validation set selects the checkpoint that is best on clean simulation,
+# which is not the thing being deployed. The cost is a little extra variance in
+# the selection metric; the alternative is selecting for the wrong distribution.
+VEL_NOISE_IN_VAL = os.environ.get("VEL_NOISE_IN_VAL", "1").strip().lower() in ("1", "true")
+
+
 config_multi_angle = {
     'batch_size': 256,
     'num_epochs': 1000,
@@ -427,6 +481,14 @@ config_multi_angle = {
     'variant_log_transform': VARIANT_LOG_TRANSFORM,
     'max_push_lateral_offset': MAX_PUSH_LATERAL_OFFSET,
     'max_push_com_offset': MAX_PUSH_COM_OFFSET,
+    # --- observation noise ---
+    # vel_noise_sigma is filled in by train.py once the model is resolved, so
+    # config.json records the sigma a run actually used rather than the switch
+    # that selected it.
+    'vel_noise': VEL_NOISE,
+    'vel_noise_json': VEL_NOISE_JSON,
+    'vel_noise_in_val': VEL_NOISE_IN_VAL,
+    'vel_noise_sigma': 0.0,
 }
 
 used_config = config_multi_angle
