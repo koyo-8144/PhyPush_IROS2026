@@ -147,42 +147,42 @@ MODELS_TO_COMPARE = {
             "draw_thick_line": "No",
     },
 
-    # # ---------------------------------- PropPush ----------------------------------
-    # r"PropPush EE vel seq input only": {
-    #         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_only.csv",
-    #         "force_input": "No",
-    #         "draw_thick_line": "No",
-    # },
-    # r"PropPush worst manip cond": {
-    #         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_manip_cond.csv",
-    #         "force_input": "No",
-    #         "draw_thick_line": "No",
-    # },
-    # r"PropPush worst dir manip cond": {
-    #         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_dirmanip_cond.csv",
-    #         "force_input": "No",
-    #         "draw_thick_line": "No",
-    # },
-    # r"PropPush manip seq input": {
-    #         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_manip_seq.csv",
-    #         "force_input": "No",
-    #         "draw_thick_line": "No",
-    # },
-    # r"PropPush dir manip seq input": {
-    #         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_dirmanip_seq.csv",
-    #         "force_input": "No",
-    #         "draw_thick_line": "No",
-    # },
-    # r"PropPush osim seq input": {
-    #         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_osim_seq.csv",
-    #         "force_input": "No",
-    #         "draw_thick_line": "No",
-    # },
-    # r"PropPush eff mass seq input": {
-    #         "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_eff_seq.csv",
-    #         "force_input": "No",
-    #         "draw_thick_line": "No",
-    # },
+    # ---------------------------------- PropPush ----------------------------------
+    r"PropPush EE vel seq input only + obs noise": {
+            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_only_vn1434u.csv",
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    r"PropPush worst manip cond + obs noise": {
+            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_manip_cond_vn1434u.csv",
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    r"PropPush worst dir manip cond + obs noise": {
+            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_dirmanip_cond_vn1434u.csv",
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    r"PropPush manip seq input + obs noise": {
+            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_manip_seq_vn1434u.csv",
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    r"PropPush dir manip seq input + obs noise": {
+            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_dirmanip_seq_vn1434u.csv",
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    r"PropPush osim seq input + obs noise": {
+            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_osim_seq_vn1434u.csv",
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
+    r"PropPush eff mass seq input + obs noise": {
+            "path": "/home/psxkf4/CARD/phypush_diffusion/evaluation/results/domain_evaluation_summary_proppush_vel_eff_seq_vn1434u.csv",
+            "force_input": "No",
+            "draw_thick_line": "No",
+    },
 }
 
 
