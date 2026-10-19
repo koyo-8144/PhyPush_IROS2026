@@ -196,7 +196,14 @@ class VelNoise:
             else:
                 n = torch.randn_like(ref)
             return n * sigma
-        return np.random.normal(0.0, sigma, size=np.shape(ref)).astype(
+        # The generator is honoured here too. It used to be ignored on this
+        # branch, which made a caller that passed a seeded default_rng believe
+        # it had pinned the draw while every call still came from the global
+        # RNG -- silent, and exactly wrong for anything that has to be
+        # reproducible, such as a figure. np.random (the module) and a
+        # Generator share the .normal signature, so one name covers both.
+        rng = generator if generator is not None else np.random
+        return rng.normal(0.0, sigma, size=np.shape(ref)).astype(
             np.asarray(ref).dtype, copy=False)
 
     # -- reporting ------------------------------------------------------------

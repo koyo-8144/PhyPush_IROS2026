@@ -240,6 +240,65 @@ SIDECAR_BASE = os.environ.get("SIDECAR_BASE", "")
 COLLECTED_ROOT = os.environ.get(
     "COLLECTED_ROOT", "/home/psxkf4/IsaacLab/source/collected_data")
 
+# =============================================================================
+# EE VELOCITY OBSERVATION NOISE -- the same injection train.py performs
+#
+# DEFAULT OFF, and that default is the right one for the headline figure:
+# evaluation measures what a model does with the data it will actually meet, and
+# the simulated channel is the data. Adding noise here does not make the sim
+# result "more correct"; it answers a different question.
+#
+# The question it DOES answer is worth having. The real captures carry the
+# hardware noise floor; the sweep does not. So a sim angle-profile is measured on
+# a cleaner input than the real one, and part of any sim-to-real difference in
+# that profile is just the missing noise. Turning this on with the FITTED sigma
+# puts the two inputs on the same footing, which is the comparison
+# angle_profile_agreement.py is making.
+#
+#   VEL_NOISE = "off"      no injection                            (default)
+#               "on"       sigma_inject from VEL_NOISE_JSON
+#               "0.0015"   that sigma, in m/s, by hand
+#
+# Same three forms, same file and same vel_noise.VelNoise class train.py uses,
+# so a figure drawn with "on" carries the sigma the models were trained with and
+# not a second, independently chosen number.
+#
+# Velocity is fed RAW and unstandardized in this pipeline, so sigma goes in
+# directly in m/s with no z-space conversion -- hence apply(..., std=None),
+# exactly as in train.py. A pipeline that standardized velocity would have to
+# pass the channel's training std instead.
+#
+# Output goes to a SEPARATE folder when this is on (see OUT_DIR below), because
+# a noised run and a clean run of the same checkpoint produce different numbers
+# under identical file names, and the run tag has to stay parseable by
+# split_tag() in the real-side scripts.
+# =============================================================================
+VEL_NOISE = os.environ.get("VEL_NOISE", "off")
+VEL_NOISE_JSON = os.environ.get("VEL_NOISE_JSON", "vel_noise_model.json")
+# Fixed, so the figure is reproducible. Re-running must not move a panel.
+VEL_NOISE_SEED = int(os.environ.get("VEL_NOISE_SEED", 42))
+
+
+def make_vel_noise():
+    """The VelNoise train.py would have built from the same switch."""
+    _here = os.path.dirname(os.path.abspath(__file__))
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    from vel_noise import VelNoise
+    v = VEL_NOISE.strip().lower()
+    if v in ("", "off", "0", "false", "none"):
+        return VelNoise.disabled()
+    if v in ("on", "1", "true"):
+        return VelNoise.from_json(VEL_NOISE_JSON)
+    try:
+        return VelNoise(float(VEL_NOISE))
+    except ValueError:
+        raise SystemExit(
+            f"VEL_NOISE must be off | on | a sigma in m/s, got {VEL_NOISE!r}")
+
+
+VEL_NOISE_OBJ = make_vel_noise()
+
 SEQ_LEN = int(os.environ.get("SEQ_LEN", 60))
 CHUNKSIZE = int(os.environ.get("CHUNKSIZE", 200_000))
 
@@ -259,10 +318,15 @@ BATCH = int(os.environ.get("BATCH", 512))
 # =============================================================================
 # OUTPUT -- mirrors the real script's folder shape
 # =============================================================================
+# The folder carries the noise tag, so a noised run cannot overwrite a clean one.
+# The TAG, not the run tag: tag_for() has to keep the "<variant>_<root>_
+# transformer_sim" shape that split_tag() in the real-side scripts parses, and
+# appending to it would break that parse.
+_OUT_SUFFIX = "" if not VEL_NOISE_OBJ.enabled else f"_{VEL_NOISE_OBJ.tag()}"
 OUT_DIR = os.environ.get(
     "OUT_DIR",
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                 "results", "estimator_polar_sim"))
+                 "results", f"estimator_polar_sim{_OUT_SUFFIX}"))
 
 SINGLES = os.environ.get("SINGLES", "on")
 LABELS = os.environ.get("LABELS", "auto")
@@ -766,6 +830,19 @@ def build_input(df, vel_cols, variant, cfg, mean, std, logs, device):
     import torch
     seqs, cond_pfx = variant_channels(cfg, variant)
     X = df[vel_cols].values.astype(np.float32)[:, :, None]
+
+    # Observation noise on the velocity channel, as train.py applies it: white,
+    # one independent draw per timestep, in m/s on the RAW channel, BEFORE any
+    # downstream use. Channel 0 is velocity here by construction -- it is laid
+    # down first, above, and the window channels are concatenated after it.
+    #
+    # Drawn from a seeded generator so the figure is reproducible: an unseeded
+    # draw would move every panel slightly on each run and there would be no way
+    # to tell that from a real change.
+    if VEL_NOISE_OBJ.enabled:
+        rng = np.random.default_rng(VEL_NOISE_SEED)
+        X[:, :, 0] = VEL_NOISE_OBJ.apply(X[:, :, 0], generator=rng)
+
     COND = None
 
     if cond_pfx:
@@ -841,8 +918,14 @@ def predict(df, vel_cols, variant, device):
     model.eval()
 
     print(f"     {os.path.relpath(w_path, CKPT_ROOT)}")
-    print(f"     channels {expect}   input_dim={cfg.get('input_dim')}   "
-          f"cond_dim={cond_dim}   sidecar mean={mean.ravel()} std={std.ravel()}")
+    # mean/std are None for a variant that standardizes nothing (vel_only), so
+    # the sidecar part of this line has to be conditional -- ravel() on None is
+    # an AttributeError, and main()'s except would turn it into a skipped
+    # estimator with a message that says nothing about a print statement.
+    _stats = (f"sidecar mean={mean.ravel()} std={std.ravel()}" if mean is not None
+              else "no sidecar (velocity is fed raw, nothing standardized)")
+    print(f"     channels {expect or ['input_vel']}   "
+          f"input_dim={cfg.get('input_dim')}   cond_dim={cond_dim}   {_stats}")
 
     X, COND = build_input(df, vel_cols, variant, cfg, mean, std, logs, device)
     out = []
@@ -1160,6 +1243,16 @@ def main():
             print(f"     {_v:<20} NOT FOUND under this root")
     print(f"  configs    : {len(REAL_CONFIGS)} real object-surface pairs")
     print(f"  held-out   : {HELDOUT}")
+    if VEL_NOISE_OBJ.enabled:
+        print(f"  vel noise  : {VEL_NOISE_OBJ.describe()}")
+        print(f"               injected on the RAW velocity channel, seed "
+              f"{VEL_NOISE_SEED}, the same way train.py does.")
+        print(f"               This is a DIAGNOSTIC: it asks how the model "
+              f"behaves when the simulated")
+        print(f"               input carries the hardware noise floor. The "
+              f"headline sim figure is VEL_NOISE=off.")
+    else:
+        print(f"  vel noise  : off (the simulated channel as collected)")
     print(f"  normalize  : m /{M_RANGE:.4f} kg   mu /{MU_RANGE:.4f}")
     if abs(M_RANGE - _M_SPAN) < 1e-6 and abs(MU_RANGE - _MU_SPAN) < 1e-6:
         print(f"               = the span of the 27 configurations, which is what "
@@ -1270,6 +1363,10 @@ def main():
         print(f"  mass NRMSE {o['mass']['nrmse']:6.2f}%  "
               f"(constant-at-the-mean {o['mass']['base']:.2f}%)   "
               f"gain {o['mass']['gain']:.2f}   skill {o['mass']['skill']:.1f}%")
+        if "fric" in o:
+            print(f"  mu   NRMSE {o['fric']['nrmse']:6.2f}%  "
+                  f"(constant-at-the-mean {o['fric']['base']:.2f}%)   "
+                  f"gain {o['fric']['gain']:.2f}   skill {o['fric']['skill']:.1f}%")
 
     if not loaded:
         raise SystemExit("no variant produced predictions")
@@ -1354,8 +1451,13 @@ def main():
               f"not agree with it.")
 
     print(f"\n  OVERALL, per estimator")
+    # gain and skill for FRICTION as well as mass. NRMSE alone cannot tell a
+    # model that tracks mu badly from one that ignores mu and emits a constant:
+    # both land near the constant-at-the-mean score. gain (the ratio of
+    # predicted spread to true spread) goes to ~0 for a constant, and skill goes
+    # to ~0 with it, so the two columns separate the cases at a glance.
     print(f"  {'estimator':<40}{'NRMSE_m':>9}{'bias':>8}{'gain':>7}{'skill':>8}"
-          f"{'NRMSE_u':>9}")
+          f"{'NRMSE_u':>9}{'gain_u':>8}{'skill_u':>9}{'base_u':>8}")
     for v, (d, _da, _g, _o) in loaded.items():
         o = overall(d)
         if "mass" not in o:
@@ -1363,8 +1465,17 @@ def main():
         print(f"  {title_for(v)[:39]:<40}{o['mass']['nrmse']:>8.1f}%"
               f"{o['mass']['bias']:>8.3f}{o['mass']['gain']:>7.2f}"
               f"{o['mass']['skill']:>7.1f}%"
-              + (f"{o['fric']['nrmse']:>8.1f}%" if "fric" in o else f"{'--':>9}"))
+              + (f"{o['fric']['nrmse']:>8.1f}%{o['fric']['gain']:>8.2f}"
+                 f"{o['fric']['skill']:>8.1f}%{o['fric']['base']:>7.1f}%"
+                 if "fric" in o else f"{'--':>9}{'--':>8}{'--':>9}{'--':>8}"))
 
+    print("\n  gain_u near 0 with skill_u near 0 means mu is not being tracked: "
+          "the model emits")
+    print("  something close to a constant, and its NRMSE_u is then just base_u, "
+          "what a")
+    print("  constant at the mean scores. A real mu estimate has gain_u near 1 "
+          "and skill_u well")
+    print("  above 0.")
     print("\n  READING THESE AGAINST THE REAL FIGURES")
     print("  Same radius, same angles, same configurations -- but the sim object is")
     print("  a cube at the real object's mass and friction, and each cell here")
