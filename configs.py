@@ -151,7 +151,7 @@ if _gc is not None:
 #
 # "" leaves every one of them exactly as the plain blocks below set them.
 # =============================================================================
-TRAIN_FROM = "from_20261007_v4"
+TRAIN_FROM = "from_20261016"
 TRAIN_FROM = os.environ.get("TRAIN_FROM", TRAIN_FROM)
 
 COLLECTED_DATA_ROOT = "/home/psxkf4/IsaacLab/source/collected_data"

@@ -77,19 +77,74 @@ from sklearn.model_selection import GroupShuffleSplit
 # VARIANT_SPEC row pointing at the wrong folder is the easiest mistake to make
 # and the hardest to see in a finished figure.
 # =============================================================================
+# CKPT_ROOT = os.environ.get(
+#     "CKPT_ROOT",
+#     os.path.join(os.path.dirname(os.path.abspath(__file__)),
+#                  "results", "checkpoints", "from_20260916", "gripper_closed"))
 CKPT_ROOT = os.environ.get(
     "CKPT_ROOT",
     os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                 "results", "checkpoints", "from_20260916", "gripper_closed"))
+                 "results", "checkpoints", "from_20261016", "gripper_closed"))
 
 CKPT_FILE = os.environ.get("CKPT_FILE", "transformer_epoch1000.pth")
 
-VARIANT_SPEC = {
-    "vel_manip_seq": ("20260918_004750",
-                      "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq"),
-    "vel_manip_cond": ("20260917_220336",
-                       "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_cond"),
+# Hand-written rows. Normally EMPTY: the table below is discovered from disk, by
+# reading each run's own config.json. A hardcoded timestamp goes stale the moment
+# a variant is retrained, and the stale row points at a directory that either does
+# not exist under the current CKPT_ROOT or -- worse -- holds a different variant.
+#
+# Fill a row in only to break a genuine ambiguity: two runs of one variant under
+# one root, where the directory names cannot say which is meant. An entry here
+# WINS over discovery.
+VARIANT_SPEC_OVERRIDE = {
+    # "vel_manip_seq": ("20261016_163158",
+    #                   "pinn_pcri-L1_p5c10.0_multiangle_vel_manip_seq_vn1434u"),
 }
+
+
+def discover_variant_spec(root):
+    """{variant: (run, model_string)} read from the checkpoints themselves.
+
+    Each run folder holds exactly one model-string subfolder, and its config.json
+    records the input_variant it was trained for. That is the only place the
+    pairing is actually recorded -- the model string usually ends in the variant
+    name, but not for vel_only (whose string has no variant suffix) and not when
+    a tag like _vn1434u is appended, so parsing the folder name is guesswork and
+    reading config.json is not.
+
+    Returns ({}, [note]) rather than raising, so a missing root still reaches the
+    normal error path with its own message.
+    """
+    found, notes, dupes = {}, [], {}
+    for cfg_path in sorted(glob.glob(os.path.join(root, "*", "*", "config.json"))):
+        model_dir = os.path.dirname(cfg_path)
+        run = os.path.basename(os.path.dirname(model_dir))
+        model_string = os.path.basename(model_dir)
+        try:
+            v = json.load(open(cfg_path)).get("input_variant")
+        except Exception as exc:                              # noqa: BLE001
+            notes.append(f"  [note] unreadable {cfg_path}: {type(exc).__name__}")
+            continue
+        if not v:
+            continue
+        if not os.path.exists(os.path.join(model_dir, CKPT_FILE)):
+            notes.append(f"  [note] {run}/{model_string}: no {CKPT_FILE}, skipped")
+            continue
+        if v in found:
+            dupes.setdefault(v, [found[v]]).append((run, model_string))
+            continue
+        found[v] = (run, model_string)
+    for v, rows in dupes.items():
+        notes.append(
+            f"  [WARNING] {len(rows)} runs under this root say input_variant="
+            f"'{v}': {[r for r, _m in rows]}. Keeping {rows[0][0]}. Put the one "
+            f"you mean in VARIANT_SPEC_OVERRIDE.")
+    return found, notes
+
+
+_DISCOVERED, _DISCOVERY_NOTES = discover_variant_spec(CKPT_ROOT)
+VARIANT_SPEC = dict(_DISCOVERED)
+VARIANT_SPEC.update(VARIANT_SPEC_OVERRIDE)
 
 VARIANTS = os.environ.get("VARIANTS", " ".join(VARIANT_SPEC)).split()
 
@@ -319,6 +374,59 @@ def sidecar_for(base, variant):
     return f"{base}.arm_stats.{variant}.npz"
 
 
+def variant_needs_sidecar(variant):
+    """Does this variant standardize any channel?
+
+    vel_only does not: velocity is fed RAW and unstandardized, so training never
+    wrote a sidecar for it -- which is why six sidecars serve seven variants.
+    Asking for one is not a missing file, it is a category error, and both the
+    resolve_data() check and predict() have to know the difference.
+    """
+    try:
+        _w, cpath = checkpoint_paths(variant)
+        seqs, cond = variant_channels(json.load(open(cpath)), variant)
+    except Exception:                                         # noqa: BLE001
+        return True          # unreadable: assume it needs one and let it fail loudly
+    return bool(cond) or bool(seqs)
+
+
+def root_word():
+    """The collection root CKPT_ROOT sits under, e.g. 'from_20261016'."""
+    return os.path.basename(os.path.dirname(CKPT_ROOT.rstrip(os.sep)))
+
+
+def root_spec_entry():
+    """configs.ROOT_SPEC[<this root>], or None.
+
+    configs.py is this project's single source of truth for which sweep a
+    collection root READS and which stem its sidecars are WRITTEN under -- the
+    two come apart for several roots, from_20261016 among them (reads ..._sb3,
+    writes ..._sb3_n1). Guessing that pairing from the files on disk is what
+    made resolve_data() ambiguous in the first place, so ask the table.
+
+    Imported defensively: configs.py prints, reads TRAIN_FROM from the
+    environment, and raises when TRAIN_FROM and GRIPPER_CLOSED disagree. None of
+    that should take this figure down, so a failure just falls back to the glob.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import configs
+    except Exception as exc:                                  # noqa: BLE001
+        print(f"  [note] configs.py not importable ({type(exc).__name__}); "
+              f"falling back to searching for the sidecars on disk")
+        return None
+    spec = getattr(configs, "ROOT_SPEC", {}).get(root_word())
+    if spec is None:
+        return None
+    collected = getattr(configs, "COLLECTED_DATA_ROOT", COLLECTED_ROOT)
+    csv_stem, stats_stem, logs = spec
+    return (os.path.join(collected, csv_stem, f"{csv_stem}.csv"),
+            os.path.join(collected, stats_stem, f"{stats_stem}.csv"),
+            dict(logs))
+
+
 def resolve_data():
     """(csv_path, sidecar_base) for the sweep these checkpoints were trained on.
 
@@ -335,6 +443,32 @@ def resolve_data():
         return SIM_CSV, SIDECAR_BASE
     if SIM_CSV:
         return SIM_CSV, SIM_CSV
+
+    # configs.ROOT_SPEC first: it STATES the pairing instead of inferring it,
+    # which is the only way to be right when the CSV stem and the sidecar stem
+    # differ. The glob below cannot distinguish ..._sb3 from ..._sb3_n1 -- both
+    # are closed-gripper sweeps carrying sidecars for every variant -- and that
+    # is exactly the case this root is.
+    entry = root_spec_entry()
+    if entry is not None:
+        csv_path, base, logs = entry
+        print(f"  root spec  : configs.ROOT_SPEC[{root_word()!r}]")
+        print(f"     reads   {csv_path}")
+        print(f"     sidecar {base}"
+              + ("   (redirected)" if base != csv_path else ""))
+        print(f"     log     {logs}")
+        missing = [v for v in VARIANTS
+                   if variant_needs_sidecar(v)
+                   and not os.path.exists(sidecar_for(base, v))]
+        if missing:
+            raise SystemExit(
+                f"configs.ROOT_SPEC says this root's sidecars live under\n"
+                f"    {base}\n"
+                f"  but there is none for {missing}.\n"
+                f"  Either those variants were never trained under "
+                f"{root_word()}, or the stats were written elsewhere -- set "
+                f"SIDECAR_BASE to override.")
+        return csv_path, base
 
     # Every sidecar on disk for the variants asked for, grouped by its base.
     bases = {}
@@ -404,6 +538,23 @@ def load_sidecar(base, variant):
             if "log_transform" in d else [False])
     chans = ([str(c) for c in np.atleast_1d(d["channels"]).tolist()]
              if "channels" in d else [])
+
+    # Cross-check the sidecar's own log flags against configs.ROOT_SPEC for this
+    # collection root. This is what catches the wrong STEM: ..._sb3 and
+    # ..._sb3_n1 both carry a sidecar for every variant, and nothing else in the
+    # pipeline would notice that the stats came from the other one. A sweep
+    # standardized in log space and one standardized linearly differ by orders of
+    # magnitude, so a mismatch here is never cosmetic.
+    if ROOT_LOGS_RESOLVED and chans:
+        for c, lg in zip(chans, logs):
+            want = ROOT_LOGS_RESOLVED.get(c)
+            if want is not None and bool(want) != bool(lg):
+                raise SystemExit(
+                    f"{path} has log_transform={bool(lg)} for '{c}', but "
+                    f"configs.ROOT_SPEC[{root_word()!r}] says {bool(want)}.\n"
+                    f"  The sidecar and the collection root disagree, which "
+                    f"usually means this is the other sweep's stem. Check "
+                    f"ROOT_SPEC, or set SIDECAR_BASE explicitly.")
     return mean, std, logs, chans
 
 
@@ -665,9 +816,14 @@ def predict(df, vel_cols, variant, device):
             f"whose config.json says input_variant='{ck_v}'. Fix the mapping "
             f"rather than the check -- the figure would be mislabelled.")
 
-    mean, std, logs, chans = load_sidecar(SIDECAR_BASE_RESOLVED, variant)
     seqs, cond_pfx = variant_channels(cfg, variant)
     expect = [cond_pfx] if cond_pfx else list(seqs)
+    if expect:
+        mean, std, logs, chans = load_sidecar(SIDECAR_BASE_RESOLVED, variant)
+    else:
+        # Velocity only: nothing is standardized, so there is no sidecar to read
+        # and build_input() never touches mean/std.
+        mean, std, logs, chans = None, None, [], []
     if chans and chans != expect:
         raise SystemExit(f"sidecar holds stats for {chans} but the checkpoint "
                          f"standardizes {expect}")
@@ -961,10 +1117,14 @@ def draw(variant, data, gts, order, t, path, lim, labels, rows_df):
 
 
 SIDECAR_BASE_RESOLVED = ""
+# {channel: log flag} from configs.ROOT_SPEC for this collection root, filled by
+# resolve_data(). Empty when configs.py had no entry, in which case load_sidecar
+# has nothing to cross-check against and trusts the sidecar.
+ROOT_LOGS_RESOLVED = {}
 
 
 def main():
-    global SIDECAR_BASE_RESOLVED
+    global SIDECAR_BASE_RESOLVED, ROOT_LOGS_RESOLVED
     if LABELS not in ("on", "off", "auto"):
         raise SystemExit(f"LABELS must be on|off|auto, got {LABELS!r}")
     if SINGLES not in ("on", "off", "only"):
@@ -976,7 +1136,28 @@ def main():
     print(" PER-ESTIMATOR POLAR CHARTS  --  SIMULATION")
     print("=" * 88)
     print(f"  checkpoints: {CKPT_ROOT}")
+    for _n in _DISCOVERY_NOTES:
+        print(_n)
+    if not VARIANT_SPEC:
+        raise SystemExit(
+            f"No run under {CKPT_ROOT} has a config.json naming an "
+            f"input_variant.\n"
+            f"  Expected <CKPT_ROOT>/<run>/<model_string>/config.json beside "
+            f"{CKPT_FILE}.\n"
+            f"  Set CKPT_ROOT to the collection root you mean, or fill in "
+            f"VARIANT_SPEC_OVERRIDE.")
     print(f"  variants   : {VARIANTS}")
+    print(f"  discovered : {len(_DISCOVERED)} run(s) from "
+          f"{CKPT_ROOT}/*/*/config.json"
+          + (f", {len(VARIANT_SPEC_OVERRIDE)} overridden"
+             if VARIANT_SPEC_OVERRIDE else ""))
+    for _v in VARIANTS:
+        if _v in VARIANT_SPEC:
+            _r, _m = VARIANT_SPEC[_v]
+            _src = "override" if _v in VARIANT_SPEC_OVERRIDE else "config.json"
+            print(f"     {_v:<20} {_r}/{_m}   [{_src}]")
+        else:
+            print(f"     {_v:<20} NOT FOUND under this root")
     print(f"  configs    : {len(REAL_CONFIGS)} real object-surface pairs")
     print(f"  held-out   : {HELDOUT}")
     print(f"  normalize  : m /{M_RANGE:.4f} kg   mu /{MU_RANGE:.4f}")
@@ -993,6 +1174,8 @@ def main():
 
     csv_path, sidecar_base = resolve_data()
     SIDECAR_BASE_RESOLVED = sidecar_base
+    _entry = root_spec_entry()
+    ROOT_LOGS_RESOLVED = _entry[2] if _entry else {}
     if not os.path.exists(csv_path):
         raise SystemExit(f"sweep not found: {csv_path}")
     print(f"  sweep      : {csv_path}")
