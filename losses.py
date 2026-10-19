@@ -6,6 +6,7 @@ def log_mse_loss(pred, target):
     log_target = torch.log1p(torch.abs(target))
     return F.mse_loss(log_pred, log_target)
 
+
 class PinnLossCalculator:
     def __init__(self, criterion, gravity=9.81):
         self.criterion = criterion
